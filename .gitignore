@@ -1,0 +1,28 @@
+# Bake output
+mothbake-out/
+out/
+*.bake.log
+
+# Generated example artifacts
+examples/generated/
+examples/sources/
+
+# Local environment (keep the example)
+.env
+.env.*
+!.env.example
+
+# Test scratch space
+test/tmp/*
+!test/tmp/.gitkeep
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Editors and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tgz
