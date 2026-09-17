@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeHdr, decodeMidi, decodePng, encodeMidi, encodePng, unzip, wavInfo } from '../src/decoders/index.mjs';
+import { decodeHdr, decodeMidi, decodePng, decodeWav, encodeMidi, encodePng, encodeWav, unzip, wavInfo, zip } from '../src/decoders/index.mjs';
 import { readFixture } from './helpers.mjs';
 
 test('decodePng reads a recorded truecolour PNG', () => {
@@ -102,6 +102,104 @@ test('wavInfo describes a recorded impulse response', () => {
 
 test('wavInfo rejects non-WAV data', () => {
   assert.throws(() => wavInfo(Buffer.alloc(64)), /not a RIFF\/WAVE/);
+});
+
+test('decodeWav decodes 8/16/24-bit PCM and 32-bit float fixtures', () => {
+  const cases = [
+    ['clip-pcm8.wav', { format: 'pcm', bits: 8, channels: 1 }],
+    ['clip-pcm16.wav', { format: 'pcm', bits: 16, channels: 1 }],
+    ['clip-pcm24.wav', { format: 'pcm', bits: 24, channels: 2 }],
+    ['clip-float32.wav', { format: 'float', bits: 32, channels: 2 }],
+  ];
+  for (const [name, expected] of cases) {
+    const decoded = decodeWav(readFixture(name), { mixdown: true });
+    assert.equal(decoded.format, expected.format, name);
+    assert.equal(decoded.bits, expected.bits, name);
+    assert.equal(decoded.channels, expected.channels, name);
+    assert.equal(decoded.sampleRate, 8000, name);
+    assert.equal(decoded.frames, 400, name);
+    assert.equal(decoded.channelData.length, expected.channels, name);
+    assert.equal(decoded.samples.length, 400, name);
+    for (const sample of decoded.samples) {
+      assert.ok(Number.isFinite(sample) && sample >= -1.0001 && sample <= 1.0001, `${name} sample out of range: ${sample}`);
+    }
+  }
+});
+
+test('decodeWav keeps channels separate unless a mixdown is asked for', () => {
+  const stereo = decodeWav(readFixture('clip-float32.wav'));
+  assert.equal(stereo.channelData.length, 2);
+  assert.equal(stereo.samples, undefined);
+  const mono = decodeWav(readFixture('clip-float32.wav'), { mixdown: true });
+  for (let i = 0; i < mono.frames; i++) {
+    assert.ok(Math.abs(mono.samples[i] - (stereo.channelData[0][i] + stereo.channelData[1][i]) / 2) < 1e-6);
+  }
+});
+
+test('encodeWav round-trips PCM and float samples', () => {
+  const source = new Float32Array([0, 0.5, -0.5, 1, -1, 0.25, -0.75, 0.125]);
+  for (const [format, tolerance] of [
+    ['pcm8', 0.01],
+    ['pcm16', 1e-4],
+    ['pcm24', 1e-6],
+    ['pcm32', 1e-8],
+    ['float32', 1e-7],
+  ]) {
+    const decoded = decodeWav(encodeWav(source, { sampleRate: 8000, format }), { mixdown: true });
+    assert.equal(decoded.sampleRate, 8000);
+    assert.equal(decoded.frames, source.length);
+    for (let i = 0; i < source.length; i++) {
+      assert.ok(Math.abs(decoded.samples[i] - source[i]) <= tolerance, `${format}[${i}]: ${decoded.samples[i]} != ${source[i]}`);
+    }
+  }
+});
+
+test('encodeWav writes and decodeWav reads multiple channels', () => {
+  const left = new Float32Array([0.25, -0.25, 0.5]);
+  const right = new Float32Array([-0.5, 0.5, -0.125]);
+  const decoded = decodeWav(encodeWav([left, right], { sampleRate: 16000, format: 'pcm16' }));
+  assert.equal(decoded.channels, 2);
+  assert.equal(decoded.sampleRate, 16000);
+  assert.ok(Math.abs(decoded.channelData[0][2] - 0.5) < 1e-4);
+  assert.ok(Math.abs(decoded.channelData[1][0] + 0.5) < 1e-4);
+});
+
+test('decodeWav rejects unsupported formats, bit depths and channel counts', () => {
+  const base = encodeWav(new Float32Array([0, 0.5, -0.5, 0]), { sampleRate: 8000, format: 'pcm16' });
+  const alaw = Buffer.from(base);
+  alaw.writeUInt16LE(6, 20); // fmt chunk: A-law
+  assert.throws(() => decodeWav(alaw), /not supported/);
+  const weird = Buffer.from(base);
+  weird.writeUInt16LE(12, 34); // 12-bit PCM
+  assert.throws(() => decodeWav(weird), /12-bit PCM unsupported/);
+  const surround = encodeWav([new Float32Array(2), new Float32Array(2), new Float32Array(2)], { sampleRate: 8000 });
+  assert.throws(() => decodeWav(surround, { maxChannels: 2 }), /3 channels exceed maxChannels=2/);
+  assert.throws(() => encodeWav(new Float32Array(2), { format: 'pcm12' }), /unknown encode format/);
+});
+
+test('zip writes archives that unzip reads back exactly', () => {
+  const entries = new Map([
+    ['hello.txt', 'hello world '.repeat(20)],
+    ['payload/data.bin', Buffer.from(Array.from({ length: 64 }, (_, i) => (i * 7) % 256))],
+    ['nested/θ.txt', 'unicode'],
+  ]);
+  for (const method of ['store', 'deflate', 'auto']) {
+    const archive = zip(entries, { method });
+    const back = unzip(archive);
+    assert.deepEqual([...back.keys()], [...entries.keys()], method);
+    for (const [name, data] of entries) {
+      assert.deepEqual(back.get(name), Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8'), `${method}:${name}`);
+    }
+  }
+});
+
+test('zip output is deterministic and rejects malformed inputs', () => {
+  const entries = [['a.txt', 'aaa'], ['b.txt', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']];
+  assert.deepEqual(zip(entries), zip(entries));
+  assert.throws(() => zip(new Map()), /no entries/);
+  assert.throws(() => zip([42]), /pairs or \{ name, data \}/);
+  assert.throws(() => zip(new Map([['x', 'y']]), { method: 'bzip2' }), /unknown method/);
+  assert.throws(() => unzip(Buffer.from('definitely not a zip archive')), /end-of-central-directory/);
 });
 
 test('decodeMidi reads a recorded motif', () => {

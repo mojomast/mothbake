@@ -5,7 +5,7 @@ import fs from 'node:fs';
 
 export const version = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-export { decodePng, encodePng, crc32, unzip, decodeHdr, wavInfo, decodeMidi, encodeMidi, decoders } from './decoders/index.mjs';
+export { decodePng, encodePng, crc32, unzip, zip, decodeHdr, wavInfo, decodeWav, encodeWav, mixdownChannels, decodeGif, decodeMidi, encodeMidi, decoders } from './decoders/index.mjs';
 export { bakers, bakerTypes, bakerBuckets, resolveBakers } from './bakers/index.mjs';
 export { emitters, emitterTypes, resolveEmitters, runEmitters } from './emitters/index.mjs';
 export { bundleRecords, summarizeRecords } from './bundle.mjs';
