@@ -185,10 +185,16 @@ test('effect-frame accepts `effect` as a key alias and `name` wins', () => {
   assert.equal(withBoth.key, 'rift');
 });
 
-test('effect-frame bakes portal and spark generator grids', () => {
+test('effect-frame bakes every generator grid', () => {
   for (const [fixture, ramp] of [
     ['portal-grid.json', 'plasma'],
     ['spark-grid.json', 'ember'],
+    ['bloom-grid.json', 'ember'],
+    ['vortex-grid.json', 'plasma'],
+    ['contract-grid.json', 'quantum'],
+    ['rise-grid.json', 'quantum'],
+    ['shield-grid.json', 'quantum'],
+    ['snow-grid.json', 'quantum'],
   ]) {
     const record = bakers['effect-frame'](
       { id: 'x' },

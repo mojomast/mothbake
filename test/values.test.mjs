@@ -1,6 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { generateValues, generatorTypes, generators, heightGrid, portalGrid, radialGrid, sparkGrid } from '../src/values.mjs';
+import {
+  generateValues,
+  generatorTypes,
+  generators,
+  heightGrid,
+  portalGrid,
+  radialGrid,
+  sparkGrid,
+  bloomGrid,
+  vortexGrid,
+  contractGrid,
+  riseGrid,
+  shieldGrid,
+  snowGrid,
+} from '../src/values.mjs';
 import { fbm2, hash2, tileFbm, valueNoise, wrapIndex } from '../src/noise.mjs';
 
 const isGrid = (grid, size) =>
@@ -29,6 +43,27 @@ test('radial, portal and spark grids are deterministic and non-negative', () => 
   }
 });
 
+test('effect generator grids are deterministic, bounded and change per frame', () => {
+  const effectGenerators = [
+    ['bloom', bloomGrid, 23],
+    ['vortex', vortexGrid, 37],
+    ['contract', contractGrid, 53],
+    ['rise', riseGrid, 71],
+    ['shield', shieldGrid, 89],
+    ['snow', snowGrid, 107],
+  ];
+  for (const [name, make, seed] of effectGenerators) {
+    const frame0 = make(16, 0, seed);
+    const frame1 = make(16, 1, seed);
+    assert.ok(isGrid(frame0, 16), `${name} frame 0 is a 16x16 grid in [0, 1]`);
+    assert.ok(isGrid(frame1, 16), `${name} frame 1 is a 16x16 grid in [0, 1]`);
+    assert.deepEqual(make(16, 0, seed), frame0, `${name} is deterministic`);
+    assert.notDeepEqual(frame0, frame1, `${name} changes per frame`);
+    assert.notDeepEqual(make(16, 0, seed + 1), frame0, `${name} changes with the seed`);
+    assert.ok(isGrid(generators[name]({ size: 4 }), 4), `${name} is registered and size-parameterized`);
+  }
+});
+
 test('generateValues resolves specs through the registry', () => {
   assert.equal(generateValues({}), null);
   assert.equal(generateValues({ generateValues: {} }), null);
@@ -40,14 +75,16 @@ test('generateValues resolves specs through the registry', () => {
 test('generateValues fails clearly on an unknown type', () => {
   assert.throws(
     () => generateValues({ generateValues: { type: 'vibes' } }),
-    /unknown generateValues\.type "vibes" \(available: height, radial, portal, spark\)/,
+    /unknown generateValues\.type "vibes" \(available: height, radial, portal, spark, bloom, vortex, contract, rise, shield, snow\)/,
   );
 });
 
 test('generateValues accepts a custom registry entry', () => {
   const grid = generateValues({ generateValues: { type: 'flat', size: 4 } }, { ...generators, flat: (spec) => [[spec.size]] });
   assert.deepEqual(grid, [[4]]);
-  assert.ok(generatorTypes.includes('height'));
+  for (const type of ['height', 'radial', 'portal', 'spark', 'bloom', 'vortex', 'contract', 'rise', 'shield', 'snow']) {
+    assert.ok(generatorTypes.includes(type), `${type} is a built-in generator`);
+  }
 });
 
 test('noise helpers are deterministic and in range', () => {
