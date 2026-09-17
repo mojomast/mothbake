@@ -85,6 +85,14 @@ resolved against the output dir by emitters that need the bytes.
 `bake.effect`, then the job id, so an effect can be labelled independently of
 the record key.
 
+`sprite-sheet` and `audio-clip` follow the same records-are-data rule: the GIF
+decoder composites every frame to full-screen RGBA and the baker packs those
+frames into one base64 atlas with per-frame rectangles; the WAV decoder
+normalises PCM to float channels and the baker emits a small self-contained WAV
+(base64) plus trim, gain and loop metadata. Neither bakes a consumer-specific
+shape — the `atlas` emitter and the `files` emitter decide how the bytes land on
+disk.
+
 The built-in bakers are thin wrappers over the decoders:
 
 | Baker | Decoders used |
@@ -94,6 +102,8 @@ The built-in bakers are thin wrappers over the decoders:
 | `normal-map`, `effect-frame` | `resampleGrid`, `gridToNormal`, `gridToRamp` |
 | `motif` | `decodeMidi` |
 | `ir` / `ir-descriptor` | `wavInfo` |
+| `sprite-sheet` | `decodeGif` |
+| `audio-clip` | `decodeWav`, `encodeWav`, `mixdownChannels` |
 | `level-graph`, `seed` | none (inline JSON) |
 
 ### 5. Bundle (`src/bundle.mjs`)
@@ -117,7 +127,10 @@ a `log`. The registry resolves config entries in three shapes:
 - `(records, ctx) => [...]` or `{ name, options, emit }` — custom, from a module
   config
 
-Defaults: with no `emitter`/`emitters`, a single `files` emitter runs.
+Defaults: with no `emitter`/`emitters`, a single `files` emitter runs. The
+`atlas` built-in is a specialised writer: it turns each `sprite-sheet` record
+into a PNG plus a JSON sidecar and leaves other record types untouched, so it
+composes with `files`/`json`/`esm` in one run.
 
 ## Extension points
 
@@ -136,8 +149,10 @@ Defaults: with no `emitter`/`emitters`, a single `files` emitter runs.
 - **Zero runtime dependencies.** Decoders are the risky part of any bake step
   (files must be readable years later); owning them keeps the tool auditable and
   installable in air-gapped CI. PNG (filters 0–4, colour types 0/2/3/4/6,
-  non-interlaced), ZIP (stored/deflate), Radiance RGBE (flat/modern RLE), WAV
-  (metadata only) and MIDI (format 0/1) are covered.
+  non-interlaced), GIF87a/89a (LZW, interlace, transparency, disposal, loops),
+  ZIP (stored/deflate read and write), Radiance RGBE (flat/modern RLE), WAV
+  (8/16/24/32-bit PCM and 32-bit float decode/encode) and MIDI (format 0/1) are
+  covered.
 - **Records are data, not code.** Emitters decide the final shape; the game
   module shape is just one `esm` config, not a special case in the runner.
 - **Recorded fixtures are first-class.** Any job can carry a `recorded` block,
@@ -171,9 +186,9 @@ src/values.mjs          generateValues grids
 src/noise.mjs           deterministic value noise
 src/sources.mjs         procedural source-art generator
 src/image.mjs           pixel/grid helpers, ramps, base64
-src/decoders/{png,zip,hdr,wav,midi}.mjs
+src/decoders/{png,gif,zip,hdr,wav,midi}.mjs
 src/bakers/*.mjs        one file per baker + registry
-src/emitters/*.mjs      files, json, esm + registry
+src/emitters/*.mjs      files, json, esm, atlas + registry
 ```
 
 ## Tests
@@ -183,6 +198,8 @@ Everything runs under `node --test` and makes no external network calls:
 | Area | File |
 | --- | --- |
 | Decoders, against recorded fixtures | `test/decoders.test.mjs` |
+| GIF decoding (interlace, transparency, disposal, errors) | `test/gif.test.mjs` |
+| Sprite-sheet/audio-clip bakers + atlas emitter | `test/media.test.mjs` |
 | Bakers, against recorded fixtures | `test/bakers.test.mjs` |
 | Values and noise determinism | `test/values.test.mjs` |
 | Source art and motif round-trips | `test/sources.test.mjs` |

@@ -38,9 +38,12 @@ pipeline; "here" is `mothbake`.
 | --- | --- | --- | --- |
 | PNG decode (8-bit, filters 0–4, colour types 0/2/3/4/6, non-interlaced) | yes | yes | Identical raster; here adds structural validation and clearer errors. |
 | PNG encode | yes (RGB) | yes (RGB + RGBA) | RGBA encoding is a here-only extension used by the `files` emitter. |
+| GIF87a/89a decode (global/local colour tables, LZW, interlace, transparency, disposal 0–3, loop count) | yes | yes | Frames are composited to full-screen RGBA; reserved disposal 4–7 treated as 0. |
 | ZIP read (stored + deflate) | yes | yes | Here verifies the local header and inflated size. |
+| ZIP write (stored + deflate) | yes | yes | Deterministic classic archive; ZIP64 rejected with a clear error. |
 | Radiance RGBE `.hdr` (flat + modern RLE) | yes | yes | Identical maths. |
 | WAV inspect | yes | yes | Here also reports container format and frame count. |
+| WAV PCM/float decode + encode (8/16/24/32-bit PCM, 32-bit float) | yes | yes | A-law/µ-law/ADPCM and odd bit depths rejected; >8 channels rejected or mixed down. |
 | Standard MIDI read/write (format 0/1) | yes | yes | Here handles running status, track chunks and an SMPTE guard. |
 
 ### Bakers
@@ -56,6 +59,8 @@ pipeline; "here" is `mothbake`.
 | `motif` | yes | yes | Adds `maxNotes`, `transpose`, `slot`. |
 | `ir` / `ir-descriptor` | yes | yes | Adds `tapsSlot`, `url`, `urlBase`; emits a portable relative `file`. |
 | `seed` | yes | yes | Adds `hexChars`; records the full entropy certificate. |
+| `sprite-sheet` | yes | yes | Options: `slot`, `name`, `bucket`, `maxWidth`, `powerOfTwo`, `dedupe`. |
+| `audio-clip` | yes | yes | Options: `slot`, `name`, `bucket`, `trim`, `threshold`, `pad`, `trimStart`, `trimEnd`, `normalize`, `peak`, `sampleFormat`, `loopStart`, `loopEnd`, `mixdown`, `maxChannels`. |
 
 ### Value generators
 
@@ -89,6 +94,7 @@ pipeline; "here" is `mothbake`.
 | `validate` command and config schema checks | no | yes | Here-only. |
 | Custom bakers / generators / emitters from a module config | no | yes | Here-only extension points. |
 | Emitters (files / JSON / ESM) | partial | yes | Upstream writes one hard-coded module; here emitters are a registry. |
+| Emitter `atlas` (sprite-sheet PNG + JSON sidecar) | partial | yes | Deterministic and idempotent; composes with the other emitters. |
 | API client (engines, jobs, assets, polling) | yes | yes | Injectable `fetch`/`sleep` for offline tests. |
 
 ## Deliberately not ported
@@ -102,6 +108,12 @@ These are private-consumer concerns, so they stay upstream:
 - The consuming runtime's module shape. Here it is one possible `esm` emitter
   config, not a special case.
 
+## Output rights
+
+`mothbake` is MIT, but generated-output rights are the user's responsibility:
+baked assets remain subject to the terms of whichever upstream service produced
+them and to the rights of any source material supplied.
+
 ## Sync log
 
 - **2026-09-17** — Ported the upstream `strict` run option (with the `--strict`
@@ -109,3 +121,17 @@ These are private-consumer concerns, so they stay upstream:
   for the `portal` and `spark` value generators, extended the source-art example
   across all pattern families, and added tests for each. Recorded this sync
   record and capability matrix.
+- **2026-09-17** — Unlocked the animated-image and audio engines. Added a
+  dependency-free GIF87a/89a decoder (`src/decoders/gif.mjs`: global/local
+  colour tables, LZW, interlacing, transparency, disposal 0–3, NETSCAPE loop
+  count), upgraded `src/decoders/wav.mjs` to a real PCM/float decoder plus
+  `encodeWav`/`mixdownChannels` while keeping `wavInfo`, and added a
+  deterministic ZIP writer (`zip`) beside `unzip` in `src/decoders/zip.mjs`.
+  Added the `sprite-sheet` baker (GIF → packed atlas with duplicate-frame
+  trimming, max-atlas width and power-of-two padding), the `audio-clip` baker
+  (WAV → trimmed, peak-normalised clip with optional loop points) and the
+  `atlas` emitter (sprite-sheet PNG + JSON sidecar). Offline tests generate
+  tiny fixtures with the system `ffmpeg` and commit them under `test/fixtures/`
+  (see `scripts/make-fixtures.sh`); they cover interlace/transparency/disposal,
+  pixel-exact packing, PCM round-trips, ZIP round-trips and error paths. Added
+  the `walk-sheet` and `sfx-clip` example jobs and the output-rights note.

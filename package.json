@@ -43,8 +43,11 @@
     "manifest",
     "codegen",
     "png",
+    "gif",
+    "wav",
     "hdr",
     "zip",
+    "sprite-sheet",
     "decoder",
     "zero-dependencies"
   ],

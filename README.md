@@ -5,15 +5,16 @@
 **Manifest-driven asset baking with zero runtime dependencies.**
 
 `mothbake` runs a list of jobs against an asset-generation API, decodes every
-result itself (PNG, ZIP, Radiance HDR, WAV, MIDI), reduces each result to a
+result itself (PNG, GIF, ZIP, Radiance HDR, WAV, MIDI), reduces each result to a
 small portable record, and emits whatever your project consumes: decoded files,
-one JSON bundle, a generated ES module, or a custom emitter you write in a few
-lines.
+sprite-sheet atlases, one JSON bundle, a generated ES module, or a custom
+emitter you write in a few lines.
 
 It is built for pipelines where baked data must be deterministic, committed to
 the repository, and readable at runtime without a browser decoder, a build step,
 or an npm dependency tree — game textures, skyboxes, normal maps, animation
-frames, material LUTs, impulse responses, motifs and seeds.
+frames, sprite sheets, material LUTs, impulse responses, audio clips, motifs and
+seeds.
 
 ## Gallery
 
@@ -52,9 +53,11 @@ by a compatibility renderer.
 ## Features
 
 - **Zero runtime dependencies.** Every decoder is in this repository — PNG
-  (filters 0–4, colour types 0/2/3/4/6), ZIP (stored/deflate), Radiance RGBE
-  (flat and modern RLE), WAV (metadata) and Standard MIDI (format 0/1). Auditable
-  and installable in air-gapped CI.
+  (filters 0–4, colour types 0/2/3/4/6), GIF87a/89a (LZW, interlace,
+  transparency, disposal, loops), ZIP (stored/deflate read *and* write),
+  Radiance RGBE (flat and modern RLE), WAV (PCM 8/16/24/32-bit and 32-bit float
+  decode + encode) and Standard MIDI (format 0/1). Auditable and installable in
+  air-gapped CI.
 - **Config is data or code.** A `mothbake.json` manifest, or a
   `mothbake.config.mjs` module when you want custom bakers, emitters or value
   generators.
@@ -129,8 +132,9 @@ decoded files per bucket, `raw/` archives of the engine results, `index.json`,
 and the `baked.mjs` module the config asked for.
 
 A complete offline example — texture, sky, normal map, three effect frames
-(radial, portal and spark generators), LUT, motif and impulse response — lives
-in [`examples/manifest.json`](examples/manifest.json):
+(radial, portal and spark generators), LUT, motif, impulse response, an animated
+GIF sprite sheet and a trimmed audio clip — lives in
+[`examples/manifest.json`](examples/manifest.json):
 
 ```bash
 node bin/mothbake.mjs run --config examples/manifest.json --out out/examples
@@ -282,6 +286,26 @@ in the config. Built-ins:
 Only `sources` writes files for patterns the jobs actually reference; the
 filter is the set of `inputs` basenames across all jobs (plus `motif.mid`).
 
+## Decoders
+
+Every decoder is dependency-free and importable from `mothbake/decoders` or the
+`mothbake/decoders/<name>` subpath (for example `mothbake/decoders/gif`).
+
+| Format | Direction | Notes |
+| --- | --- | --- |
+| PNG (8-bit, non-interlaced) | decode + encode | Filters 0–4; colour types 0/2/3/4/6. Encoding is RGB or RGBA. |
+| GIF87a/89a | decode | Global and local colour tables, LZW, interlacing, transparency, disposal methods 0–3 and the NETSCAPE loop count. Frames are composited onto a transparent logical-screen canvas, so every frame is full-size RGBA. |
+| ZIP | read + write | Stored and deflate. `zip()` writes a deterministic classic archive (fixed DOS timestamp); ZIP64 is rejected with a clear error. |
+| Radiance RGBE `.hdr` | decode | Flat and modern RLE. |
+| WAV | inspect + decode + encode | 8/16/24/32-bit PCM and 32-bit float, up to 8 channels (more is a clear error, mixdown available). A-law, µ-law, ADPCM, 64-bit float and odd bit depths are rejected. |
+| Standard MIDI | read + write | Format 0/1, running status, track chunks, SMPTE guard. |
+
+`decodeWav(buffer, { mixdown })` returns normalized `channelData` (`Float32Array`
+per channel) plus `samples` when `mixdown: true`; `encodeWav()` writes canonical
+little-endian WAV back. `decodeGif(buffer)` returns `{ width, height, version,
+background, loops, frames }` with `delay` in seconds. `unzip()`/`zip()` read and
+write archives for engine input bundles.
+
 ## Bakers
 
 A baker is a pure function that turns a finished job into a **portable record**
@@ -299,6 +323,8 @@ decoded output slots, the inline result, the job, and the bake options.
 | `motif` | MIDI | `{ bpm, ppq, notes: [{ step, midi, dur, vel }] }` (steps in sixteenths) | `slot`, `name`, `bucket`, `maxNotes`, `transpose` |
 | `ir` (alias `ir-descriptor`) | WAV (+ taps JSON) | `{ file, url, seconds, sampleRate, channels, format, taps }` | `slot`, `tapsSlot`, `name`, `bucket`, `maxTaps`, `url`, `urlBase` |
 | `seed` | inline JSON | `{ seed, hex, bytes, bell, commitment, certificate, … }` | `name`, `bucket`, `hexChars` |
+| `sprite-sheet` | GIF | `{ sheet: { width, height, format: 'rgba8', data }, frames: [{ index, x, y, w, h, delay, delayCs, duplicate }], loops, fps?, source }` | `slot`, `name`, `bucket`, `maxWidth`, `powerOfTwo`, `dedupe` |
+| `audio-clip` | WAV | `{ container: 'wav', format, sampleFormat, sampleRate, channels, frames, seconds, data, loopStart, loopEnd, gain, peak, trimStart, trimEnd, source }` | `slot`, `name`, `bucket`, `trim`, `threshold`, `pad`, `trimStart`, `trimEnd`, `normalize`, `peak`, `sampleFormat`, `loopStart`, `loopEnd`, `mixdown`, `maxChannels` |
 
 Notes:
 
@@ -312,6 +338,18 @@ Notes:
   (e.g. `"/audio/ir"` → `/audio/ir/<raw>/result.wav`).
 - Grid-based bakers accept the inline result, a `{ result: … }` response, or a
   `{ output: … }` value, so the same config works for live and recorded runs.
+- `sprite-sheet` packs the composited GIF frames left-to-right, wrapping to a
+  new row at `maxWidth` (default 2048). The sheet is trimmed to the used area
+  unless `powerOfTwo` pads both axes. Consecutive identical frames are not given
+  a new rectangle: with `dedupe` (default true) the duplicate keeps its own
+  `delay` and reuses the previous rectangle, so playback timing is unchanged;
+  set `dedupe: false` to give every frame its own rectangle.
+- `audio-clip` trims leading/trailing silence below `threshold` (default 0.001)
+  and restores `pad` seconds (default 0) on each side; `trimStart`/`trimEnd`
+  (seconds) override auto-detection and `trim: false` disables it. The clip is
+  peak-normalised to `peak` (default 1) unless `normalize: false`, and the
+  applied `gain` plus the pre-normalisation `peak` are recorded. `loopStart` and
+  `loopEnd` are seconds measured from the start of the trimmed clip.
 
 ## Emitters
 
@@ -337,9 +375,10 @@ Built-ins:
 
 | `type` | Writes | Options |
 | --- | --- | --- |
-| `files` | one file per record, decoded: `<bucket>/<key>.png` for image records, `.r.png`/`.t.png` for LUTs, numbered frames for effects, `.json` for structured records, IR audio copied next to its descriptor, plus `index.json` | `dir`, `index`, `indexFile` |
+| `files` | one file per record, decoded: `<bucket>/<key>.png` for image and sprite-sheet records, `.r.png`/`.t.png` for LUTs, numbered frames for effects, `<bucket>/<key>.wav` for audio clips, `.json` for structured records, IR audio copied next to its descriptor, plus `index.json` | `dir`, `index`, `indexFile` |
 | `json` | one aggregate bundle: `{ version, generator, provenance, <buckets…> }` | `file`, `pretty`, `provenance`, `shape` (`buckets` \| `records`) |
 | `esm` | a generated module: `export const <name> = …; export default <name>;` | `file`, `export`, `defaultExport`, `header`, `provenance`, `shape` |
+| `atlas` | `<bucket>/<key>.png` for each sprite-sheet record plus a `<bucket>/<key>.json` sidecar with the animation metadata; deterministic and idempotent | `dir`, `sidecar`, `pretty` |
 
 ```jsonc
 {
@@ -358,6 +397,39 @@ or several at once:
   ]
 }
 ```
+
+### Animated images and audio
+
+```jsonc
+{
+  "jobs": [
+    {
+      "id": "walk-sheet",
+      "engine": "qrc-image-v1",
+      "bake": { "type": "sprite-sheet", "name": "walk", "maxWidth": 256, "powerOfTwo": true },
+      "recorded": { "outputs": { "result": "../test/fixtures/anim.gif" } }
+    },
+    {
+      "id": "sfx-clip",
+      "engine": "qrc-audio-v1",
+      "bake": {
+        "type": "audio-clip",
+        "name": "footstep",
+        "threshold": 0.001,
+        "sampleFormat": "pcm16",
+        "loopStart": 0,
+        "loopEnd": 0.02
+      },
+      "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
+    }
+  ],
+  "emitters": [{ "type": "atlas" }, { "type": "files" }]
+}
+```
+
+The `atlas` emitter writes `sprites/walk.png` plus `sprites/walk.json`
+(`{ width, height, sheet, frames, loops, fps }`); `files` writes
+`audio/footstep.wav` from the normalised clip.
 
 ## Extend it
 
@@ -409,8 +481,9 @@ pipeline and the rule for keeping the two in step.
 ## Examples
 
 [`examples/manifest.json`](examples/manifest.json) is a runnable config with
-texture, sky, normal map, three effect frames, LUT, motif and
-impulse-response jobs. Every job is recorded, so it works offline with no key:
+texture, sky, normal map, three effect frames, LUT, motif, impulse-response,
+sprite-sheet and audio-clip jobs. Every job is recorded, so it works offline with
+no key:
 
 ```bash
 node bin/mothbake.mjs validate --config examples/manifest.json
@@ -442,7 +515,16 @@ and spawned CLI processes.
 The README gallery is generated from recorded bakes with Python (Pillow +
 numpy); see `python3 scripts/gallery.py --help` for the inputs it expects.
 
+The animated-GIF and WAV fixtures used by the media tests were generated once
+with the system `ffmpeg` and committed, so the suite stays offline; regenerate
+them with `scripts/make-fixtures.sh` if `ffmpeg` is available.
+
 ## License
 
 MIT © mojomast — see [LICENSE](LICENSE). Use it, fork it, ship baked assets with
 it.
+
+**Generated-output rights.** mothbake itself is MIT, but the assets it bakes are
+yours to account for: output rights are the user's responsibility and remain
+subject to the terms of whichever upstream service produced them and to the
+rights of any source material you supplied.
