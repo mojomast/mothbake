@@ -215,7 +215,7 @@
       "sz_samp": 0.2709147135416667,
       "sz_tomo": 0.3989740882730737
     },
-    "name": "TokenArena Arena",
+    "name": "Example Arena",
     "num_qubits": 16,
     "relationships": [],
     "results": {
