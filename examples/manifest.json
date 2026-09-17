@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "generator": "mothbake",
+  "comment": "Example config. Every job is recorded, so `mothbake run --config examples/manifest.json` works offline with no API key: the recorded fixture stands in for the live engine result. Remove the `recorded` blocks (and export MOTH_API_KEY) to run the same jobs for real. Paths in `recorded` and `inputs` are relative to this file.",
+  "sources": {
+    "dir": "sources",
+    "patterns": {
+      "rock": { "size": 256, "palette": [0.5, 0.46, 0.4], "pattern": "noise", "contrast": 0.7, "seed": 11 },
+      "nebula": { "size": 256, "wide": 2, "palette": [0.26, 0.3, 0.5], "pattern": "stars", "contrast": 0.6, "seed": 23 },
+      "macro": { "size": 256, "palette": [0.62, 0.58, 0.5], "pattern": "noise", "contrast": 0.95, "freq": 2, "seed": 31 }
+    },
+    "motif": { "ppq": 480, "bpm": 60 }
+  },
+  "emitters": [
+    { "type": "files" },
+    { "type": "esm", "file": "baked.mjs", "export": "BAKED", "provenance": true }
+  ],
+  "jobs": [
+    {
+      "id": "rock-tile",
+      "engine": "blur-v1",
+      "credits": 1,
+      "inputs": { "image": "sources/rock.png" },
+      "params": { "strength": 0.32, "style": "ry", "reach": 0.35, "size": 256, "downscale": true },
+      "raw": "rock-tile",
+      "bake": { "type": "texture-tile", "name": "rock", "size": 64 },
+      "recorded": { "outputs": { "result": "../test/fixtures/tile.png" } }
+    },
+    {
+      "id": "nebula-sky",
+      "engine": "blur-v1",
+      "credits": 1,
+      "inputs": { "image": "sources/nebula.png" },
+      "params": { "strength": 0.6, "style": "ry", "reach": 0.85, "size": 512, "downscale": true },
+      "raw": "nebula-sky",
+      "bake": { "type": "sky", "name": "nebula", "width": 128, "height": 64 },
+      "recorded": { "outputs": { "result": "../test/fixtures/sky.png" } }
+    },
+    {
+      "id": "rock-normals",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "height", "size": 64, "seed": 11, "kind": "noise" },
+      "params": { "style": "xy", "strength": [0.35, 0.35], "reach": 0.15, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "rock-normals",
+      "bake": { "type": "normal-map", "name": "rock", "size": 32, "strength": 1.7 },
+      "recorded": { "result": "../test/fixtures/height-grid.json" }
+    },
+    {
+      "id": "rift-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "radial", "size": 32, "frame": 0, "seed": 3 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "rift-frame",
+      "bake": { "type": "effect-frame", "name": "rift", "index": 0, "fps": 10, "size": 48, "tint": "quantum" },
+      "recorded": { "result": "../test/fixtures/effect-grid.json" }
+    },
+    {
+      "id": "lut-pack",
+      "engine": "entanglement-shader-v1",
+      "credits": 1,
+      "params": { "style": "peaked", "layers": 3, "resolution": 80, "absorption": 0.9, "reflectance": 0.3, "interaction": 1.2, "incoming_rays": 8 },
+      "raw": "lut-pack",
+      "bake": { "type": "material-lut", "name": "iridescent", "size": 24 },
+      "recorded": { "outputs": { "result": "../test/fixtures/lut-pack.zip" } }
+    },
+    {
+      "id": "oracle-motif",
+      "engine": "qrc-midi-v1",
+      "credits": 5,
+      "inputs": { "midi": "sources/motif.mid" },
+      "params": { "bpm": 60, "length": 16, "velocity": 80, "loop": true, "quality": "moderate", "variation": 0.4, "seed": 7 },
+      "raw": "oracle-motif",
+      "bake": { "type": "motif", "name": "oracle" },
+      "recorded": { "outputs": { "result": "../test/fixtures/motif.mid" } }
+    },
+    {
+      "id": "cavern-ir",
+      "engine": "retrocausal-echo-v1",
+      "credits": 2,
+      "params": {
+        "emit": "audio",
+        "ir_seconds": 4,
+        "sr": 22050,
+        "output_format": "pcm_16",
+        "lattice": "square",
+        "width": 4,
+        "height": 5,
+        "decay": 0.85,
+        "feedback": 0.5,
+        "diffusion_ms": 200,
+        "min_level": 0.03,
+        "seed": 12345,
+        "include_tap_map": true
+      },
+      "raw": "cavern-ir",
+      "bake": { "type": "ir", "name": "cavern", "urlBase": "/audio/irs" },
+      "recorded": {
+        "outputs": {
+          "result": "../test/fixtures/impulse.wav",
+          "taps": "../test/fixtures/impulse-taps.json"
+        }
+      }
+    }
+  ]
+}
