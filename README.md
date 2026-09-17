@@ -64,7 +64,7 @@ by a compatibility renderer.
 - **Offline-first.** Any job can carry a `recorded` block, so examples and tests
   run the *same* pipeline with no key and no network.
 - **Failures are per job.** One bad job is reported and the rest still run; the
-  command exits `1` at the end.
+  command exits `1` at the end. Add `--strict` to stop at the first failure.
 - **Provenance by default.** Bundles carry `engine`, `jobId`, `mode` and
   `credits` per job, and successful live submissions write their `jobId` back so
   the next run downloads instead of paying again.
@@ -128,9 +128,9 @@ Every artifact is written under `mothbake-out/` (change it with `--out`):
 decoded files per bucket, `raw/` archives of the engine results, `index.json`,
 and the `baked.mjs` module the config asked for.
 
-A complete offline example — texture, sky, normal map, effect frame, LUT, motif
-and impulse response — lives in
-[`examples/manifest.json`](examples/manifest.json):
+A complete offline example — texture, sky, normal map, three effect frames
+(radial, portal and spark generators), LUT, motif and impulse response — lives
+in [`examples/manifest.json`](examples/manifest.json):
 
 ```bash
 node bin/mothbake.mjs run --config examples/manifest.json --out out/examples
@@ -153,6 +153,7 @@ Options:
       --only <id>      Only this job (repeatable or comma-separated); with sources: pattern names
       --force          Ignore recorded fixtures and cached job ids; submit fresh jobs
       --dry            Print what would run without touching the API or writing files
+      --strict         Stop at the first failed job instead of continuing
       --base <url>     Override the API base URL
   -h, --help           Show help
   -v, --version        Show the version
@@ -181,9 +182,10 @@ has errors (warnings are printed but do not fail the run).
 5. **Emit** — hand all records to the configured emitters.
 
 A failed job is reported and the remaining jobs still run; the command exits 1
-at the end. Successful live submissions record their `jobId` back into a JSON
-config, so re-running downloads the existing result instead of paying for
-another run. Add `--force` to submit fresh jobs anyway.
+at the end. Pass `--strict` (or `strict: true` to `runConfig`) to stop at the
+first failure instead. Successful live submissions record their `jobId` back
+into a JSON config, so re-running downloads the existing result instead of
+paying for another run. Add `--force` to submit fresh jobs anyway.
 
 ## Configuration
 
@@ -292,7 +294,7 @@ decoded output slots, the inline result, the job, and the bake options.
 | `sky` | PNG | same, plus `equirect: true` | `slot`, `name`, `bucket`, `width`, `height` |
 | `material-lut` | ZIP | `{ size, format: 'rgb8', r, t }` (base64) | `slot`, `name`, `bucket`, `size`, `reflectance`, `transmittance` |
 | `normal-map` | grid result | RGBA tangent-space normals (base64) | `name`, `bucket`, `size`, `strength` |
-| `effect-frame` | grid result | one RGBA frame; same `bucket`+`key` merges into `{ fps, frames }` | `name`, `bucket`, `size`, `index`, `fps`, `tint`, `ramp`, `ramps` |
+| `effect-frame` | grid result | one RGBA frame; same `bucket`+`key` merges into `{ fps, frames }` | `name`, `effect`, `bucket`, `size`, `index`, `fps`, `tint`, `ramp`, `ramps` |
 | `level-graph` | inline JSON | `{ name, rows, cols, numQubits, coupling, cells, measurements, metrics }` | `name`, `bucket`, `maxMeasurements` |
 | `motif` | MIDI | `{ bpm, ppq, notes: [{ step, midi, dur, vel }] }` (steps in sixteenths) | `slot`, `name`, `bucket`, `maxNotes`, `transpose` |
 | `ir` (alias `ir-descriptor`) | WAV (+ taps JSON) | `{ file, url, seconds, sampleRate, channels, format, taps }` | `slot`, `tapsSlot`, `name`, `bucket`, `maxTaps`, `url`, `urlBase` |
@@ -303,7 +305,8 @@ Notes:
 - Image records carry base64 bytes plus `format` (`rgba8` and `rgb8` are the
   current formats), so emitters and consumers never have to guess.
 - `effect-frame` records with the same `bucket` and `key` merge by `index`; the
-  last `fps` wins and gaps are removed.
+  last `fps` wins and gaps are removed. The key falls back to `bake.effect` when
+  `bake.name` is absent, so an effect can be named independently of the record.
 - `ir.file` is relative to the output dir. `url` is only populated when the bake
   config sets `url` (with `{raw}`, `{slot}`, `{file}` placeholders) or `urlBase`
   (e.g. `"/audio/ir"` → `/audio/ir/<raw>/result.wav`).
@@ -400,12 +403,14 @@ aggregate with a provenance table is one valid config, and a flat record list
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) documents the pipeline stages,
 the module map, the decoder coverage and the design decisions behind them.
+[docs/SYNC.md](docs/SYNC.md) records what this tool shares with its upstream
+pipeline and the rule for keeping the two in step.
 
 ## Examples
 
 [`examples/manifest.json`](examples/manifest.json) is a runnable config with
-texture, sky, normal map, effect frame, LUT, motif and impulse-response jobs.
-Every job is recorded, so it works offline with no key:
+texture, sky, normal map, three effect frames, LUT, motif and
+impulse-response jobs. Every job is recorded, so it works offline with no key:
 
 ```bash
 node bin/mothbake.mjs validate --config examples/manifest.json

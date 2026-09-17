@@ -31,6 +31,7 @@ Options:
       --only <id>      Only this job (repeatable or comma-separated); with sources: pattern names
       --force          Ignore recorded fixtures and cached job ids; submit fresh jobs
       --dry            Print what would run without touching the API or writing files
+      --strict         Stop at the first failed job instead of continuing
       --base <url>     Override the API base URL
   -h, --help           Show this help
   -v, --version        Show the version
@@ -59,7 +60,7 @@ export function parseArgs(argv) {
       flat.push(token);
     }
   }
-  const args = { _: [], only: [], config: undefined, out: undefined, base: undefined, force: false, dry: false, help: false, version: false };
+  const args = { _: [], only: [], config: undefined, out: undefined, base: undefined, force: false, dry: false, strict: false, help: false, version: false };
   const takeValue = (token, index) => {
     if (index + 1 >= flat.length) throw new Error(`${token} needs a value`);
     return flat[index + 1];
@@ -74,6 +75,7 @@ export function parseArgs(argv) {
     else if (token === '--base') args.base = takeValue(token, i++);
     else if (token === '--force') args.force = true;
     else if (token === '--dry') args.dry = true;
+    else if (token === '--strict') args.strict = true;
     else if (token.startsWith('-') && token !== '-') throw new Error(`unknown option: ${token}`);
     else args._.push(token);
   }
@@ -174,6 +176,7 @@ async function commandRun(args, context) {
     only: args.only,
     force: args.force,
     dry: args.dry,
+    strict: args.strict,
     log: (message) => stderr(`${message}\n`),
   });
   if (args.dry) {

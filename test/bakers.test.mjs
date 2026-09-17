@@ -168,6 +168,34 @@ test('effect-frame accepts custom ramps from config', () => {
   assert.equal(fromBase64(record.value.data).length, 4 * 4 * 4);
 });
 
+test('effect-frame accepts `effect` as a key alias and `name` wins', () => {
+  const withEffect = bakers['effect-frame'](
+    { id: 'x' },
+    ctx({ result: fixtureJson('effect-grid.json'), bake: { type: 'effect-frame', effect: 'portal', size: 4 } }),
+  );
+  assert.equal(withEffect.key, 'portal');
+  const withBoth = bakers['effect-frame'](
+    { id: 'x' },
+    ctx({ result: fixtureJson('effect-grid.json'), bake: { type: 'effect-frame', name: 'rift', effect: 'portal', size: 4 } }),
+  );
+  assert.equal(withBoth.key, 'rift');
+});
+
+test('effect-frame bakes portal and spark generator grids', () => {
+  for (const [fixture, ramp] of [
+    ['portal-grid.json', 'plasma'],
+    ['spark-grid.json', 'ember'],
+  ]) {
+    const record = bakers['effect-frame'](
+      { id: 'x' },
+      ctx({ result: fixtureJson(fixture), bake: { type: 'effect-frame', name: 'fx', size: 16, tint: ramp } }),
+    );
+    assert.equal(record.merge, 'frames');
+    assert.equal(record.value.format, 'rgba8');
+    assert.equal(fromBase64(record.value.data).length, 16 * 16 * 4);
+  }
+});
+
 test('level-graph flattens a labyrinth result', () => {
   const record = bakers['level-graph'](
     { id: 'arena' },

@@ -59,10 +59,25 @@ test('runConfig --dry reports the planned actions and writes nothing', async (t)
   assert.equal(result.dry, true);
   assert.deepEqual(result.failures, []);
   assert.equal(result.records.length, 0);
-  assert.equal(result.plan.length, 7);
+  assert.equal(result.plan.length, 9);
   assert.ok(result.plan.every((entry) => entry.action === 'recorded'));
   assert.equal(result.plan[0].baker, 'texture-tile');
   assert.ok(!fs.existsSync(outDir), 'dry runs write nothing');
+});
+
+test('runConfig strict rethrows the first job failure instead of collecting it', async (t) => {
+  const dir = path.join(ROOT, 'test', 'tmp', `strict-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(dir, { recursive: true });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const live = { jobs: [{ id: 'needs-key', engine: 'e' }] };
+
+  const collected = await runConfig({ config: live, configDir: dir, outDir: path.join(dir, 'out'), key: null, log: () => {} });
+  assert.equal(collected.failures.length, 1);
+
+  await assert.rejects(
+    () => runConfig({ config: live, configDir: dir, outDir: path.join(dir, 'out'), key: null, strict: true, log: () => {} }),
+    /MOTH_API_KEY is required to run live job "needs-key"/,
+  );
 });
 
 test('runConfig records jobIds back into JSON configs only when they change', async (t) => {

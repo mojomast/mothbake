@@ -55,6 +55,9 @@ Newly obtained `jobId`s are written back to JSON configs only when they change
 and when `writeBack !== false`. Module configs are never rewritten; the runner
 logs the ids instead (they are in the bundle's provenance either way).
 
+By default a failed job is collected and the run continues; `strict: true`
+(the CLI's `--strict`) rethrows the first failure and aborts before emitting.
+
 ### 4. Records (`src/bakers/`)
 
 A baker is `bake(job, ctx) => { bucket, key, value, merge?, index?, fps? }`.
@@ -77,6 +80,10 @@ Records are JSON-serializable by design: no buffers, no file handles, no
 functions. That makes them easy to diff, emit, or push through a custom
 pipeline. `value.file` is the one exception in spirit — it is a *relative path*
 resolved against the output dir by emitters that need the bytes.
+
+`effect-frame` records name their key with `bake.name` and fall back to
+`bake.effect`, then the job id, so an effect can be labelled independently of
+the record key.
 
 The built-in bakers are thin wrappers over the decoders:
 
@@ -141,6 +148,15 @@ Defaults: with no `emitter`/`emitters`, a single `files` emitter runs.
   surfaced, but custom extension options are not blocked.
 - **Failures are per job.** One bad job does not stop a run; the CLI exits 1 at
   the end and prints each failure.
+
+## Upstream sync
+
+`mothbake` is the portable, de-branded counterpart of a private asset pipeline.
+Every generic mechanism in that pipeline — a decoder, baker, source pattern,
+value generator, emitter or runner option — is expected to exist here too.
+[docs/SYNC.md](SYNC.md) holds the maintenance rule and a capability matrix; the
+short version is that a new upstream capability is only complete once it is
+ported here with tests, docs and a changelog note.
 
 ## Module map
 

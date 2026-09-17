@@ -21,7 +21,9 @@ export function bake(job, ctx) {
   const rgba = gridToRamp(field, size, size, options.ramp ?? options.tint ?? 'quantum', ramps);
   return {
     bucket: options.bucket ?? defaultBucket,
-    key: options.name ?? job.id,
+    // `effect` is accepted as a key alias for configs that named the effect
+    // separately from the record name.
+    key: options.name ?? options.effect ?? job.id,
     merge: 'frames',
     index,
     fps,

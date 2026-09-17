@@ -36,7 +36,7 @@ test('unknown commands and options exit 1 with a hint', async () => {
 test('validate accepts the example manifest', async () => {
   const { code, stdout, stderr } = await runCli(['validate', '--config', EXAMPLES]);
   assert.equal(code, 0);
-  assert.match(stdout, /OK — 7 job\(s\)/);
+  assert.match(stdout, /OK — 9 job\(s\)/);
   assert.equal(stderr, '');
 });
 
@@ -60,7 +60,7 @@ test('run --dry plans the recorded jobs without a key or writes', async (t) => {
   const outDir = path.join(root, 'not-created');
   const { code, stdout, stderr } = await runCli(['run', '--config', EXAMPLES, '--out', outDir, '--dry']);
   assert.equal(code, 0);
-  assert.match(stdout, /dry run — 7 job\(s\): \{"recorded":7\}/);
+  assert.match(stdout, /dry run — 9 job\(s\): \{"recorded":9\}/);
   assert.match(stderr, /rock-tile \(blur-v1\) — would read the recorded fixture, bake texture-tile/);
   assert.ok(!fs.existsSync(outDir), '--dry must not create the output directory');
 });
@@ -93,12 +93,33 @@ test('sources writes the patterns the jobs need plus a motif', async (t) => {
   assert.ok(!fs.existsSync(path.join(outDir, 'macro.png')), 'unreferenced patterns are skipped');
 });
 
+test('run --strict stops at the first failed job', async (t) => {
+  const dir = makeTmpDir(t, 'cli-strict');
+  const file = writeJson(path.join(dir, 'mothbake.json'), {
+    jobs: [
+      { id: 'broken', engine: 'blur-v1', recorded: { outputs: { result: './missing.png' } } },
+      { id: 'good', engine: 'blur-v1', recorded: { result: { ok: true } } },
+    ],
+  });
+
+  const lenient = await runCli(['run', '--config', file, '--out', path.join(dir, 'lenient')]);
+  assert.equal(lenient.code, 1);
+  assert.match(lenient.stderr, /failed: broken/);
+  assert.ok(fs.existsSync(path.join(dir, 'lenient', 'raw', 'good', 'result.json')), 'lenient runs continue past a failure');
+
+  const strict = await runCli(['run', '--config', file, '--out', path.join(dir, 'strict'), '--strict']);
+  assert.equal(strict.code, 1);
+  assert.match(strict.stderr, /mothbake: recorded output "result" not found/);
+  assert.ok(!strict.stderr.includes('failed: broken'), 'strict mode aborts before the failure summary');
+  assert.ok(!fs.existsSync(path.join(dir, 'strict', 'raw', 'good', 'result.json')), 'strict mode stops before later jobs');
+});
+
 test('run completes an offline recorded bake through the CLI', async (t) => {
   const outDir = path.join(makeTmpDir(t, 'cli-run'), 'out');
   const before = fs.readFileSync(EXAMPLES, 'utf8');
   const { code, stdout, stderr } = await runCli(['run', '--config', EXAMPLES, '--out', outDir]);
   assert.equal(code, 0, stderr);
-  assert.match(stdout, /baked 7 record\(s\) from 7 job\(s\)/);
+  assert.match(stdout, /baked 9 record\(s\) from 9 job\(s\)/);
   assert.match(stdout, /"textures":1/);
   assert.ok(fs.existsSync(path.join(outDir, 'baked.mjs')));
   assert.ok(fs.existsSync(path.join(outDir, 'textures', 'rock.png')));

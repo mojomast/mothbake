@@ -176,7 +176,7 @@ function writeBackJobIds({ config, configFile, writeBack, log }) {
  *   config: object, configFile?: string|null, configDir?: string,
  *   outDir?: string, key?: string|null, env?: object, base?: string,
  *   only?: string|string[]|null, force?: boolean, dry?: boolean,
- *   writeBack?: boolean, log?: (message: string) => void,
+ *   strict?: boolean, writeBack?: boolean, log?: (message: string) => void,
  *   fetchImpl?: typeof fetch, sleepImpl?: (ms: number) => Promise<void>,
  * }} options
  */
@@ -190,6 +190,7 @@ export async function runConfig(options = {}) {
     only = null,
     force = false,
     dry = false,
+    strict = false,
     log = () => {},
   } = options;
 
@@ -268,6 +269,7 @@ export async function runConfig(options = {}) {
     } catch (error) {
       log(`  FAILED: ${error.message}`);
       failures.push({ id: job.id, engine: job.engine, message: error.message });
+      if (strict) throw error;
     }
   }
 

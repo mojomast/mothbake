@@ -20,7 +20,7 @@ const errorsOf = (config, options) => validateConfig(config, options).errors.map
 test('loadConfig reads the example JSON manifest', async () => {
   const loaded = await loadConfig({ file: path.join(ROOT, 'examples', 'manifest.json') });
   assert.equal(loaded.format, 'json');
-  assert.equal(loaded.config.jobs.length, 7);
+  assert.equal(loaded.config.jobs.length, 9);
   assert.equal(loaded.dir, path.join(ROOT, 'examples'));
   assert.deepEqual(validateConfig(loaded.config).errors, []);
 });
@@ -70,7 +70,7 @@ test('validateConfig accepts a well-formed config without warnings', () => {
     jobs: [
       baseJob(),
       baseJob({ id: 'grid', engine: 'blur-core-v1', inputs: undefined, generateValues: { type: 'height', size: 32 }, bake: { type: 'normal-map', name: 'rock', size: 32 } }),
-      baseJob({ id: 'frames', engine: 'blur-core-v1', inputs: undefined, generateValues: { type: 'radial', frame: 1 }, bake: { type: 'effect-frame', name: 'rift', index: 1, fps: 10, tint: 'ember' } }),
+      baseJob({ id: 'frames', engine: 'blur-core-v1', inputs: undefined, generateValues: { type: 'radial', frame: 1 }, bake: { type: 'effect-frame', effect: 'rift', index: 1, fps: 10, tint: 'ember' } }),
     ],
     sources: { dir: 'sources', patterns: { rock: { size: 256 } }, motif: false },
     emitters: [{ type: 'files' }, { type: 'esm', file: 'baked.mjs', export: 'BAKED' }],

@@ -57,6 +57,26 @@
       "recorded": { "result": "../test/fixtures/effect-grid.json" }
     },
     {
+      "id": "portal-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "portal", "size": 32, "frame": 0, "seed": 41 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "portal-frame",
+      "bake": { "type": "effect-frame", "name": "portal", "index": 0, "fps": 10, "size": 48, "tint": "plasma" },
+      "recorded": { "result": "../test/fixtures/portal-grid.json" }
+    },
+    {
+      "id": "spark-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "spark", "size": 32, "frame": 0, "seed": 61 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "spark-frame",
+      "bake": { "type": "effect-frame", "name": "spark", "index": 0, "fps": 14, "size": 48, "tint": "ember" },
+      "recorded": { "result": "../test/fixtures/spark-grid.json" }
+    },
+    {
       "id": "lut-pack",
       "engine": "entanglement-shader-v1",
       "credits": 1,
