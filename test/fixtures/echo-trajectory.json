@@ -1,0 +1,22 @@
+{
+  "result_type": "trajectory",
+  "schema_version": 1,
+  "provenance": { "engine_id": "otoc-echo-v1", "backend": "aer", "mode": "emu", "seed": 12345, "fractional_gates": false, "twirls": 1, "ref_floor": 0.02 },
+  "data": { "observables": ["F_re", "F_im"], "sites": 4, "steps": 4, "times": [1, 2, 3, 4], "series": { "F_re": [0.9, 0.8, 0.7, 0.6], "F_im": [0, 0, 0, 0] } },
+  "extras": {
+    "lattice": "square",
+    "width": 2,
+    "height": 2,
+    "kick_site": 0,
+    "taps": [
+      { "site": 0, "depth": 1, "F_re": 0.998, "F_im": 0.0001, "level": 0.998, "polarity": 1, "x": 0, "y": 0, "time_ms": 30 },
+      { "site": 1, "depth": 1, "F_re": 0.86, "F_im": -0.002, "level": 0.86, "polarity": 1, "x": 1, "y": 0, "time_ms": 80 },
+      { "site": 2, "depth": 2, "F_re": -0.7, "F_im": 0.01, "level": 0.7, "polarity": -1, "x": 0, "y": 1, "time_ms": 110 },
+      { "site": 3, "depth": 2, "F_re": 0.52, "F_im": -0.02, "level": 0.52, "polarity": 1, "x": 1, "y": 1, "time_ms": 160 },
+      { "site": 4, "depth": 3, "F_re": 0.31, "F_im": 0.03, "level": 0.31, "polarity": 1, "x": 0, "y": 2, "time_ms": 210 }
+    ],
+    "summary": { "live": 5, "inverted": 1, "complex": 1 },
+    "spec": { "n_sites": 4, "depth": 3, "kick_site": 0, "theta_zz": 0.785, "theta_x": 0.6, "theta_z": 0.4, "disorder": 0.15, "seed": 12345, "kick": "Z", "lattice": "square", "width": 2, "height": 2 }
+  },
+  "warnings": []
+}

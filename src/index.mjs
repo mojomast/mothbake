@@ -13,5 +13,5 @@ export { ConfigError, DEFAULT_CONFIG_FILES, assertValidConfig, findConfigFile, f
 export { ApiError, DEFAULT_BASE_URL, createApi, guessContentType, readKey, resolveBaseUrl } from './api.mjs';
 export { jobsRequiringApi, normalizeOnly, runConfig, selectJobs } from './runner.mjs';
 export { generateValues, generatorTypes, generators, heightGrid, portalGrid, radialGrid, sparkGrid, bloomGrid, vortexGrid, contractGrid, riseGrid, shieldGrid, snowGrid } from './values.mjs';
-export { DEFAULT_MOTIF, DEFAULT_SOURCE_PATTERNS, makeSourceArt, writeSources } from './sources.mjs';
+export { DEFAULT_AUDIO_SOURCES, DEFAULT_MOTIF, DEFAULT_SOURCE_PATTERNS, audioKinds, makeChunkZip, makeSourceArt, makeSourceAudio, writeSources } from './sources.mjs';
 export { RAMPS, fromBase64, gridToNormal, gridToRamp, hdrToRgb8, resampleGrid, resizeNearest, toBase64 } from './image.mjs';

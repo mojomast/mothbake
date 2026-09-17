@@ -47,6 +47,8 @@ const JOB_KEYS = new Set([
   'params',
   'input',
   'inputs',
+  'inputFrom',
+  'assetIds',
   'generateValues',
   'raw',
   'bake',
@@ -116,6 +118,14 @@ export async function loadConfig(options = {}) {
   return { config, file: target, dir: path.dirname(target), format: 'module' };
 }
 
+const STRING_BAKE_KEYS = ['name', 'bucket', 'slot', 'tapsSlot', 'irSlot', 'file', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'sampleFormat'];
+const INTEGER_BAKE_KEYS = ['size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements', 'maxWidth', 'maxChannels'];
+const NUMBER_BAKE_KEYS = ['fps', 'strength', 'transpose', 'threshold', 'pad', 'peak', 'loopStart', 'loopEnd', 'loopSearch', 'loopWindow', 'loopThreshold', 'loopCrossfade', 'targetSampleRate', 'maxSeconds', 'crossfadeMs'];
+const BOOLEAN_BAKE_KEYS = ['powerOfTwo', 'dedupe', 'trim', 'normalize', 'mixdown', 'embed', 'detectLoop', 'includeZ'];
+const ARRAY_BAKE_KEYS = ['slots', 'order', 'gains'];
+const OBJECT_BAKE_KEYS = ['ramps', 'meta'];
+const KNOWN_BAKE_KEYS = new Set(['type', ...STRING_BAKE_KEYS, ...INTEGER_BAKE_KEYS, ...NUMBER_BAKE_KEYS, ...BOOLEAN_BAKE_KEYS, ...ARRAY_BAKE_KEYS, ...OBJECT_BAKE_KEYS]);
+
 function validateBake(bake, at, context) {
   const { error, warn } = context;
   if (!isPlainObject(bake)) {
@@ -127,28 +137,32 @@ function validateBake(bake, at, context) {
   } else if (!context.bakers.includes(bake.type)) {
     error(`${at}.type`, `unknown baker "${bake.type}" (available: ${context.bakers.join(', ')})`);
   }
-  for (const key of ['name', 'bucket', 'slot', 'tapsSlot', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'sampleFormat']) {
+  for (const key of STRING_BAKE_KEYS) {
     if (bake[key] !== undefined && typeof bake[key] !== 'string') error(`${at}.${key}`, `bake.${key} must be a string`);
   }
-  for (const key of ['size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements', 'maxWidth', 'maxChannels']) {
+  for (const key of INTEGER_BAKE_KEYS) {
     if (bake[key] === undefined) continue;
     if (!Number.isInteger(bake[key]) || bake[key] < 0 || (['size', 'width', 'height', 'maxWidth', 'maxChannels'].includes(key) && bake[key] === 0)) {
       error(`${at}.${key}`, `bake.${key} must be a positive integer`);
     }
   }
-  for (const key of ['fps', 'strength', 'transpose', 'threshold', 'pad', 'peak', 'loopStart', 'loopEnd']) {
+  for (const key of NUMBER_BAKE_KEYS) {
     if (bake[key] !== undefined && (typeof bake[key] !== 'number' || !Number.isFinite(bake[key]))) {
       error(`${at}.${key}`, `bake.${key} must be a number`);
     }
   }
-  for (const key of ['powerOfTwo', 'dedupe', 'trim', 'normalize', 'mixdown']) {
+  for (const key of BOOLEAN_BAKE_KEYS) {
     if (bake[key] !== undefined && typeof bake[key] !== 'boolean') {
       error(`${at}.${key}`, `bake.${key} must be a boolean`);
     }
   }
+  for (const key of ARRAY_BAKE_KEYS) {
+    if (bake[key] !== undefined && !Array.isArray(bake[key])) error(`${at}.${key}`, `bake.${key} must be an array`);
+  }
   if (bake.ramps !== undefined && !isPlainObject(bake.ramps)) error(`${at}.ramps`, 'bake.ramps must be an object of colour ramps');
+  if (bake.meta !== undefined && !isPlainObject(bake.meta)) error(`${at}.meta`, 'bake.meta must be an object');
   for (const key of Object.keys(bake)) {
-    if (['type', 'name', 'bucket', 'slot', 'tapsSlot', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'sampleFormat', 'ramps', 'size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements', 'maxWidth', 'maxChannels', 'fps', 'strength', 'transpose', 'threshold', 'pad', 'peak', 'loopStart', 'loopEnd', 'powerOfTwo', 'dedupe', 'trim', 'normalize', 'mixdown'].includes(key)) continue;
+    if (KNOWN_BAKE_KEYS.has(key)) continue;
     warn(`${at}.${key}`, `unknown bake option "${key}" (custom bakers may accept their own options)`);
   }
 }
@@ -181,6 +195,33 @@ function validateJob(job, at, context) {
     else {
       for (const [slot, value] of Object.entries(inputs)) {
         if (typeof value !== 'string' || !value) error(`${at}.inputs.${slot}`, `input path must be a non-empty string${label}`);
+      }
+    }
+  }
+  if (job.inputFrom !== undefined) {
+    if (!isPlainObject(job.inputFrom)) {
+      error(`${at}.inputFrom`, `inputFrom must map input slots to { job, slot }${label}`);
+    } else {
+      for (const [slot, ref] of Object.entries(job.inputFrom)) {
+        const atRef = `${at}.inputFrom.${slot}`;
+        if (typeof ref === 'string') {
+          if (!/^[^/:]+\/[^/]+$/.test(ref)) error(atRef, `inputFrom shorthand must be "job/slot"${label}`);
+          continue;
+        }
+        if (!isPlainObject(ref)) {
+          error(atRef, `inputFrom entry must be { job, slot } or "job/slot"${label}`);
+          continue;
+        }
+        if (typeof ref.job !== 'string' || !ref.job) error(`${atRef}.job`, `inputFrom.job must be a non-empty job id${label}`);
+        if (ref.slot !== undefined && (typeof ref.slot !== 'string' || !ref.slot)) error(`${atRef}.slot`, `inputFrom.slot must be a non-empty slot name${label}`);
+      }
+    }
+  }
+  if (job.assetIds !== undefined) {
+    if (!isPlainObject(job.assetIds)) error(`${at}.assetIds`, `assetIds must be an object of { slot: assetId }${label}`);
+    else {
+      for (const [slot, value] of Object.entries(job.assetIds)) {
+        if (typeof value !== 'string' || !value) error(`${at}.assetIds.${slot}`, `asset id must be a non-empty string${label}`);
       }
     }
   }
@@ -234,6 +275,17 @@ function validateSources(sources, at, context) {
     for (const [name, spec] of Object.entries(sources.patterns)) {
       if (!isPlainObject(spec)) error(`${at}.patterns.${name}`, 'pattern spec must be an object');
     }
+  }
+  if (sources.audio !== undefined && !isPlainObject(sources.audio)) {
+    error(`${at}.audio`, 'sources.audio must be an object of audio specs');
+  } else if (isPlainObject(sources.audio)) {
+    for (const [name, spec] of Object.entries(sources.audio)) {
+      if (!isPlainObject(spec)) error(`${at}.audio.${name}`, 'audio spec must be an object');
+    }
+  }
+  if (sources.chunks !== undefined && sources.chunks !== null && sources.chunks !== false) {
+    if (!isPlainObject(sources.chunks)) error(`${at}.chunks`, 'sources.chunks must be false or an object');
+    else if (typeof sources.chunks.from !== 'string' || !sources.chunks.from) error(`${at}.chunks.from`, 'sources.chunks.from must name an audio source');
   }
   if (sources.motif !== undefined && sources.motif !== false) {
     if (!isPlainObject(sources.motif)) error(`${at}.motif`, 'sources.motif must be false or an object of MIDI options');
@@ -310,6 +362,22 @@ export function validateConfig(config, options = {}) {
     context.error('jobs', 'jobs must be an array');
   } else {
     config.jobs.forEach((job, index) => validateJob(job, `jobs[${index}]`, context));
+    // `inputFrom` references another job's captured output asset. It resolves
+    // from the earlier job in this run, or from its persisted assetIds on a
+    // later run, so a forward reference is only a warning (it needs a prior run).
+    const positions = new Map(config.jobs.map((job, index) => [job?.id, index]));
+    config.jobs.forEach((job, index) => {
+      if (!isPlainObject(job?.inputFrom)) return;
+      for (const [slot, ref] of Object.entries(job.inputFrom)) {
+        const refJob = typeof ref === 'string' ? ref.split('/')[0] : ref?.job;
+        if (typeof refJob !== 'string' || !refJob) continue;
+        if (!positions.has(refJob)) {
+          context.error(`jobs[${index}].inputFrom.${slot}.job`, `unknown job "${refJob}"`);
+        } else if (positions.get(refJob) >= index) {
+          context.warn(`jobs[${index}].inputFrom.${slot}`, `job "${refJob}" is defined later; inputFrom resolves from that job in this run or from its persisted assetIds earlier`);
+        }
+      }
+    });
   }
   if (config.bakers !== undefined) {
     if (!isPlainObject(config.bakers)) context.error('bakers', 'bakers must be an object of functions');

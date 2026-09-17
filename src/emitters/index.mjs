@@ -14,12 +14,14 @@ import * as files from './files.mjs';
 import * as json from './json.mjs';
 import * as esm from './esm.mjs';
 import * as atlas from './atlas.mjs';
+import * as audioPack from './audio-pack.mjs';
 
 export const emitters = {
   files: files.emit,
   json: json.emit,
   esm: esm.emit,
   atlas: atlas.emit,
+  'audio-pack': audioPack.emit,
 };
 
 export const emitterTypes = Object.keys(emitters);

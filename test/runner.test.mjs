@@ -59,7 +59,7 @@ test('runConfig --dry reports the planned actions and writes nothing', async (t)
   assert.equal(result.dry, true);
   assert.deepEqual(result.failures, []);
   assert.equal(result.records.length, 0);
-  assert.equal(result.plan.length, 18);
+  assert.equal(result.plan.length, 22);
   assert.ok(result.plan.every((entry) => entry.action === 'recorded'));
   assert.equal(result.plan[0].baker, 'texture-tile');
   assert.ok(!fs.existsSync(outDir), 'dry runs write nothing');

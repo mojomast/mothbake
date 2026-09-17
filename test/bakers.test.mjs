@@ -29,6 +29,8 @@ test('the registry exposes every documented baker', () => {
     'seed',
     'sprite-sheet',
     'audio-clip',
+    'audio-stitch',
+    'echo-map',
     'ir-descriptor',
   ]);
   for (const type of bakerTypes) assert.equal(typeof bakers[type], 'function');
@@ -38,6 +40,8 @@ test('the registry exposes every documented baker', () => {
   assert.equal(bakerBuckets['ir-descriptor'], 'irs');
   assert.equal(bakerBuckets['sprite-sheet'], 'sprites');
   assert.equal(bakerBuckets['audio-clip'], 'audio');
+  assert.equal(bakerBuckets['audio-stitch'], 'audio');
+  assert.equal(bakerBuckets['echo-map'], 'spaces');
 });
 
 test('resolveBakers merges custom bakers and rejects non-functions', () => {

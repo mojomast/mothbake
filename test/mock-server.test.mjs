@@ -18,6 +18,7 @@ function startMockApi(t) {
     submits: [],
     polls: {},
     uploaded: null,
+    assetCreates: 0,
   };
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -62,6 +63,16 @@ function startMockApi(t) {
       }
       if (jobMatch && jobMatch[2] === 'result') {
         const id = jobMatch[1];
+        const submission = state.submits[Number(id.split('-')[1]) - 1];
+        if (submission?.params?.mockOutputs) {
+          const outputs = submission.params.mockOutputs.map((entry) => ({
+            slot: entry.slot,
+            url: `http://127.0.0.1:${server.address().port}${entry.path}`,
+            content_type: entry.content_type,
+            ...(entry.output_asset_id ? { output_asset_id: entry.output_asset_id } : {}),
+          }));
+          return json(200, { outputs, result: submission.params.mockResult ?? null });
+        }
         if (id === 'job-1') {
           return json(200, {
             outputs: [{ slot: 'result', url: `http://127.0.0.1:${server.address().port}/files/tile.png`, content_type: 'image/png' }],
@@ -77,7 +88,12 @@ function startMockApi(t) {
         res.writeHead(200, { 'content-type': 'image/png' });
         return res.end(readFixture('tile.png'));
       }
+      if (req.method === 'GET' && url.pathname === '/files/state.json') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ trained: true }));
+      }
       if (req.method === 'POST' && url.pathname === '/api/v1/assets') {
+        state.assetCreates += 1;
         return json(200, {
           asset_id: 'asset-1',
           upload: { url: `http://127.0.0.1:${server.address().port}/upload/asset-1`, method: 'PUT', headers: { 'x-mock': '1' } },
@@ -267,4 +283,70 @@ test('missing inputs and a missing key fail per job with actionable messages', a
   });
   assert.equal(missingKey.failures.length, 1);
   assert.match(missingKey.failures[0].message, /MOTH_API_KEY is required to run live job "no-key"/);
+});
+
+test('inputFrom reuses output asset ids and falls back to re-upload', async (t) => {
+  const dir = makeTmpDir(t, 'mock-chain');
+  const configFile = writeJson(path.join(dir, 'mothbake.json'), {
+    version: 1,
+    jobs: [
+      {
+        id: 'train',
+        engine: 'qrc-train-v2',
+        credits: 1,
+        params: {
+          mockOutputs: [
+            { slot: 'model', path: '/files/state.json', content_type: 'application/json', output_asset_id: 'asset-state-1' },
+            { slot: 'state', path: '/files/state.json', content_type: 'application/json' },
+          ],
+        },
+        raw: 'train',
+        bake: { type: 'seed', name: 'train-seed' },
+      },
+      {
+        id: 'gen',
+        engine: 'qrc-gen-v2',
+        credits: 1,
+        inputFrom: { model: { job: 'train', slot: 'model' } },
+        params: { mockOutputs: [{ slot: 'result', path: '/files/tile.png', content_type: 'image/png' }] },
+        raw: 'gen',
+        bake: { type: 'texture-tile', name: 'gen', size: 4 },
+      },
+      {
+        id: 'gen2',
+        engine: 'qrc-gen-v2',
+        credits: 1,
+        inputFrom: { model: { job: 'train', slot: 'state' } },
+        params: { mockOutputs: [{ slot: 'result', path: '/files/tile.png', content_type: 'image/png' }] },
+        raw: 'gen2',
+        bake: { type: 'texture-tile', name: 'gen2', size: 4 },
+      },
+    ],
+  });
+  const outDir = path.join(dir, 'out');
+  const { base, state } = await startMockApi(t);
+
+  const result = await runConfig({
+    config: JSON.parse(fs.readFileSync(configFile, 'utf8')),
+    configFile,
+    configDir: dir,
+    outDir,
+    key: 'test-key',
+    base,
+    sleepImpl: async () => {},
+    log: () => {},
+  });
+
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.records.length, 3);
+  // The first consumer sends the captured asset id; the second has no asset id
+  // for `state`, so it re-uploads the archived raw output.
+  assert.deepEqual(state.submits[1].input_files, { model: 'asset-state-1' });
+  assert.deepEqual(state.submits[2].input_files, { model: 'asset-1' });
+  assert.equal(state.assetCreates, 1, 'only the fallback path creates a new asset');
+  assert.deepEqual(result.provenance.train.outputs, { model: 'asset-state-1' });
+
+  // Asset ids persist into the JSON config so a later run skips the re-upload.
+  const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.deepEqual(saved.jobs[0].assetIds, { model: 'asset-state-1' });
 });

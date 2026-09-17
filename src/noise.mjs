@@ -12,6 +12,20 @@ export const hash2 = (x, y, seed) => {
 
 export const smoothStep = (t) => t * t * (3 - 2 * t);
 
+/**
+ * Small deterministic PRNG (mulberry32). Returns a function producing floats in
+ * [0, 1). Integer-hash based, so a seed gives identical streams everywhere.
+ */
+export function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /** Non-wrapping 2D value noise in [0, 1]. */
 export const valueNoise = (x, y, seed) => {
   const xi = Math.floor(x);

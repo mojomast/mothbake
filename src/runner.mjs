@@ -89,7 +89,60 @@ function loadRecorded(job, configDir) {
   return { files, sources, result, recorded: true };
 }
 
-async function resolveLiveResult({ api, job, inputs, configDir, force, log, generatorRegistry }) {
+/** Normalize an `inputFrom` reference to `{ job, slot }` (slot defaults to the input slot). */
+function normalizeInputRef(ref, slot) {
+  if (typeof ref === 'string') {
+    const [job, outputSlot] = ref.split('/');
+    return { job, slot: outputSlot || slot };
+  }
+  return { job: ref.job, slot: ref.slot || slot };
+}
+
+/** Locate an earlier job's raw output archive on disk, if it exists. */
+function findRawOutput(outDir, job, slot) {
+  const dir = path.join(outDir, 'raw', job.raw || job.id);
+  if (!fs.existsSync(dir)) return null;
+  const prefix = sanitize(slot);
+  const match = fs.readdirSync(dir).find((name) => name.startsWith(`${prefix}.`));
+  return match ? path.join(dir, match) : null;
+}
+
+/**
+ * Resolve `job.inputFrom` entries to asset ids without paying for the source
+ * job again. Resolution order: this run's captured asset id, the persisted
+ * `job.assetIds` in the config, then the earlier raw output re-uploaded.
+ */
+async function resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log }) {
+  const resolved = {};
+  for (const [slot, rawRef] of Object.entries(inputFrom ?? {})) {
+    const ref = normalizeInputRef(rawRef, slot);
+    const label = `${ref.job}/${ref.slot}`;
+    const prior = runAssets.get(ref.job);
+    const priorAsset = prior?.assetIds?.[ref.slot];
+    if (priorAsset) {
+      resolved[slot] = priorAsset;
+      log(`  inputFrom ${slot} <- ${label} (asset ${priorAsset})`);
+      continue;
+    }
+    const configJob = (config.jobs ?? []).find((candidate) => candidate.id === ref.job);
+    const savedAsset = configJob?.assetIds?.[ref.slot];
+    if (savedAsset) {
+      resolved[slot] = savedAsset;
+      log(`  inputFrom ${slot} <- ${label} (persisted asset ${savedAsset})`);
+      continue;
+    }
+    const source = prior?.saved?.get(ref.slot)?.file ?? findRawOutput(outDir, configJob ?? { id: ref.job, raw: ref.job }, ref.slot);
+    if (source && fs.existsSync(source)) {
+      resolved[slot] = await api.uploadAsset(source);
+      log(`  inputFrom ${slot} <- ${label} (re-uploaded ${path.relative(outDir, source)})`);
+      continue;
+    }
+    throw new Error(`inputFrom "${slot}": cannot resolve ${label} (no asset id and no raw output to upload)`);
+  }
+  return resolved;
+}
+
+async function resolveLiveResult({ api, job, inputs, inputFrom, config, runAssets, configDir, outDir, force, log, generatorRegistry }) {
   if (job.jobId && !force) {
     log(`  reusing job ${job.jobId}`);
     try {
@@ -100,9 +153,10 @@ async function resolveLiveResult({ api, job, inputs, configDir, force, log, gene
       log(`  could not reuse job ${job.jobId}: ${error.message}; submitting a fresh one`);
     }
   }
+  const fromAssets = await resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log });
   const inputEntries = Object.entries(inputs);
   let inputFiles;
-  if (inputEntries.length) {
+  if (inputEntries.length || Object.keys(fromAssets).length) {
     inputFiles = {};
     for (const [slot, relative] of inputEntries) {
       const file = path.resolve(configDir, relative);
@@ -111,6 +165,8 @@ async function resolveLiveResult({ api, job, inputs, configDir, force, log, gene
       }
       inputFiles[slot] = await api.uploadAsset(file);
     }
+    // An explicit inputFrom wins over a file input for the same slot (config warns).
+    for (const [slot, assetId] of Object.entries(fromAssets)) inputFiles[slot] = assetId;
   }
   const params = { ...(job.params || {}) };
   const generated = generateValues(job, generatorRegistry);
@@ -137,7 +193,7 @@ async function saveResponse({ response, api, outDir, rawName, log }) {
       const target = path.join(outDir, relative);
       fs.writeFileSync(target, buffer);
       files.set(slot, buffer);
-      saved.set(slot, { file: target, relative, contentType: null });
+      saved.set(slot, { file: target, relative, contentType: null, assetId: null });
       log(`  fixture ${path.relative(outDir, target)} (${buffer.length} bytes)`);
     }
   } else {
@@ -149,7 +205,7 @@ async function saveResponse({ response, api, outDir, rawName, log }) {
       const target = path.join(outDir, relative);
       fs.writeFileSync(target, buffer);
       files.set(slot, buffer);
-      saved.set(slot, { file: target, relative, contentType: output.content_type ?? null });
+      saved.set(slot, { file: target, relative, contentType: output.content_type ?? null, assetId: output.output_asset_id ?? null });
       log(`  saved ${path.relative(outDir, target)} (${buffer.length} bytes)`);
     }
   }
@@ -204,6 +260,8 @@ export async function runConfig(options = {}) {
   const failures = [];
   const plan = [];
   let recordedJobIds = false;
+  let recordedAssetIds = false;
+  const runAssets = new Map();
   const baseUrl = resolveBaseUrl({ base: options.base, configBaseUrl: config.baseUrl, env });
   const api = dry
     ? null
@@ -236,10 +294,18 @@ export async function runConfig(options = {}) {
           throw new Error(`MOTH_API_KEY is required to run live job "${job.id}" (set it, or add a "recorded" block for offline runs)`);
         }
         const previousJobId = job.jobId;
-        response = await resolveLiveResult({ api, job, inputs, configDir, force, log, generatorRegistry });
+        response = await resolveLiveResult({ api, job, inputs, inputFrom: job.inputFrom, config, runAssets, configDir, outDir, force, log, generatorRegistry });
         if (job.jobId && job.jobId !== previousJobId) recordedJobIds = true;
       }
       const { files, saved } = await saveResponse({ response, api, outDir, rawName, log });
+      const assetIds = {};
+      for (const [slot, entry] of saved) if (entry.assetId) assetIds[slot] = entry.assetId;
+      runAssets.set(job.id, { assetIds, saved });
+      if (Object.keys(assetIds).length) {
+        const before = job.assetIds ? JSON.stringify(job.assetIds) : null;
+        job.assetIds = assetIds;
+        if (JSON.stringify(assetIds) !== before) recordedAssetIds = true;
+      }
       if (bakeType) {
         const baker = bakers[bakeType];
         if (!baker) throw new Error(`unknown baker: ${bakeType}`);
@@ -265,6 +331,7 @@ export async function runConfig(options = {}) {
         name: job.bake?.name ?? null,
         credits: job.credits ?? null,
       };
+      if (Object.keys(assetIds).length) provenance[job.id].outputs = assetIds;
       plan.push({ id: job.id, engine: job.engine, action: 'ran', jobId: job.jobId ?? null, baker: bakeType });
     } catch (error) {
       log(`  FAILED: ${error.message}`);
@@ -281,7 +348,7 @@ export async function runConfig(options = {}) {
   if (records.length) {
     written = await runEmitters({ config, records, outDir, provenance, version, generator, log });
   }
-  const updatedConfig = recordedJobIds && writeBackJobIds({ config, configFile, writeBack: options.writeBack, log });
+  const updatedConfig = (recordedJobIds || recordedAssetIds) && writeBackJobIds({ config, configFile, writeBack: options.writeBack, log });
   return {
     dry: false,
     records,

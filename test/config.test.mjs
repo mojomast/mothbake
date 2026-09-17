@@ -20,7 +20,7 @@ const errorsOf = (config, options) => validateConfig(config, options).errors.map
 test('loadConfig reads the example JSON manifest', async () => {
   const loaded = await loadConfig({ file: path.join(ROOT, 'examples', 'manifest.json') });
   assert.equal(loaded.format, 'json');
-  assert.equal(loaded.config.jobs.length, 18);
+  assert.equal(loaded.config.jobs.length, 22);
   assert.equal(loaded.dir, path.join(ROOT, 'examples'));
   assert.deepEqual(validateConfig(loaded.config).errors, []);
 });
@@ -134,6 +134,20 @@ test('validateConfig type-checks the media baker options', () => {
   const audio = issues({ type: 'audio-clip', trim: true, threshold: 0.01, pad: 0.005, normalize: true, peak: 0.9, loopStart: 0, loopEnd: 0.5, mixdown: false, sampleFormat: 'pcm24' });
   assert.deepEqual(audio.errors, []);
   assert.deepEqual(audio.warnings, []);
+  const extended = issues({ type: 'audio-clip', embed: false, file: 'raw/x.wav', urlBase: '/a', detectLoop: true, loopSearch: 1, loopWindow: 0.02, loopThreshold: 0.5, loopCrossfade: 0.01, targetSampleRate: 22050, maxSeconds: 12, meta: { bus: 'ambience' } });
+  assert.deepEqual(extended.errors, []);
+  assert.deepEqual(extended.warnings, []);
+  const stitch = issues({ type: 'audio-stitch', slots: ['a', { slot: 'b', gain: 0.5 }], crossfadeMs: 10 });
+  assert.deepEqual(stitch.errors, []);
+  assert.deepEqual(stitch.warnings, []);
+  const badStitch = issues({ type: 'audio-stitch', slots: 'a' });
+  assert.ok(badStitch.errors.some((issue) => issue.path === 'jobs[0].bake.slots'));
+  const echo = issues({ type: 'echo-map', slot: 'result', maxTaps: 128, includeZ: true, meta: { kind: 'space' } });
+  assert.deepEqual(echo.errors, []);
+  assert.deepEqual(echo.warnings, []);
+  const badEcho = issues({ type: 'echo-map', maxTaps: 1.5, includeZ: 'yes' });
+  assert.ok(badEcho.errors.some((issue) => issue.path === 'jobs[0].bake.maxTaps'));
+  assert.ok(badEcho.errors.some((issue) => issue.path === 'jobs[0].bake.includeZ'));
 });
 
 test('assertValidConfig throws a ConfigError carrying the issues', () => {

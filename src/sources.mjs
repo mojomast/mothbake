@@ -15,7 +15,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { encodePng } from './decoders/png.mjs';
 import { encodeMidi } from './decoders/midi.mjs';
-import { hash2, tileFbm, wrap01 } from './noise.mjs';
+import { decodeWav, encodeWav } from './decoders/wav.mjs';
+import { zip } from './decoders/zip.mjs';
+import { hash2, mulberry32, tileFbm, wrap01 } from './noise.mjs';
 
 export const DEFAULT_SOURCE_PATTERNS = {
   panel: { size: 256, palette: [0.62, 0.66, 0.72], pattern: 'noise', contrast: 0.45 },
@@ -152,16 +154,136 @@ export const DEFAULT_MOTIF = [
   { tick: 5760, dur: 1440, midi: 69, vel: 88 },
 ];
 
+/** Built-in audio recipes; `sources.audio` merges over these by name. */
+export const DEFAULT_AUDIO_SOURCES = {
+  'bed-seed': { kind: 'drone', seconds: 8, sampleRate: 22050, seed: 7, baseHz: 55 },
+};
+
+const AUDIO_KINDS = {
+  // A slow evolving drone with gentle partial drift and soft pulses.
+  drone({ frames, sampleRate, spec, rnd }) {
+    const base = spec.baseHz ?? 55;
+    const partials = spec.partials ?? [[1, 1], [2, 0.4], [3, 0.2], [4.5, 0.12], [6.01, 0.08]];
+    const phases = partials.map(() => rnd() * Math.PI * 2);
+    const drift = partials.map(() => (rnd() - 0.5) * (spec.detune ?? 0.4));
+    const lfoRate = spec.lfoRate ?? 0.07;
+    const lfoPhase = rnd() * Math.PI * 2;
+    const pulseSeconds = Math.max(0.1, spec.pulseSeconds ?? 2.5);
+    const pulseLevel = spec.pulseLevel ?? 0.22;
+    const out = new Float32Array(frames);
+    for (let i = 0; i < frames; i++) {
+      const t = i / sampleRate;
+      let value = 0;
+      for (let p = 0; p < partials.length; p++) {
+        value += Math.sin(2 * Math.PI * base * (partials[p][0] + drift[p]) * t + phases[p]) * partials[p][1];
+      }
+      const lfo = 0.6 + 0.4 * Math.sin(2 * Math.PI * lfoRate * t + lfoPhase);
+      const pulse = Math.exp(-Math.pow(((t % pulseSeconds) - 0.05) / 0.12, 2)) * pulseLevel;
+      out[i] = Math.max(-1, Math.min(1, value * 0.3 * lfo + pulse * 0.6));
+    }
+    return out;
+  },
+  // A one-pole smoothed noise bed (a cheap, dependency-free texture).
+  noise({ frames, sampleRate, spec, rnd }) {
+    const smooth = Math.max(1, Math.round(((spec.smoothMs ?? 30) / 1000) * sampleRate));
+    const out = new Float32Array(frames);
+    let state = 0;
+    for (let i = 0; i < frames; i++) {
+      state += (rnd() * 2 - 1 - state) / smooth;
+      out[i] = Math.max(-1, Math.min(1, state * 2.4));
+    }
+    return out;
+  },
+  // Exponentially decaying pulses on a fixed period.
+  pulse({ frames, sampleRate, spec }) {
+    const period = Math.max(1, Math.round((spec.pulseSeconds ?? 0.5) * sampleRate));
+    const width = Math.max(1, Math.round(((spec.pulseMs ?? 40) / 1000) * sampleRate));
+    const out = new Float32Array(frames);
+    for (let i = 0; i < frames; i++) {
+      const phase = i % period;
+      out[i] = phase < width ? Math.exp(-phase / (width * 0.35)) : 0;
+    }
+    return out;
+  },
+};
+
+export const audioKinds = Object.keys(AUDIO_KINDS);
+
+/**
+ * Render a deterministic, original mono seed WAV for audio engines (the audio
+ * analogue of `makeSourceArt`). The output is a pure function of the spec, so
+ * a `qrc-audio` input can be committed and reproduced without an external
+ * sample library.
+ *
+ * Spec: `{ kind: drone|noise|pulse, seconds, sampleRate, seed, sampleFormat,
+ * fadeSeconds, … kind-specific knobs }`. Either call `makeSourceAudio(spec)` or
+ * `makeSourceAudio(name, spec, { recipes })` to merge over a named recipe.
+ *
+ * @returns {Buffer} WAV bytes.
+ */
+export function makeSourceAudio(nameOrSpec = {}, spec = {}, options = {}) {
+  const recipes = options.recipes ?? DEFAULT_AUDIO_SOURCES;
+  const merged = typeof nameOrSpec === 'string'
+    ? { ...(recipes[nameOrSpec] || {}), ...spec }
+    : { ...nameOrSpec, ...spec };
+  const kind = merged.kind ?? 'drone';
+  const render = AUDIO_KINDS[kind];
+  if (!render) throw new Error(`sources: unknown audio kind "${kind}" (expected ${audioKinds.join(', ')})`);
+  const seconds = merged.seconds ?? 8;
+  const sampleRate = merged.sampleRate ?? 22050;
+  if (!(seconds > 0)) throw new Error('sources: audio seconds must be a positive number');
+  if (!(sampleRate > 0)) throw new Error('sources: audio sampleRate must be a positive number');
+  const frames = Math.max(1, Math.round(seconds * sampleRate));
+  const rnd = mulberry32(merged.seed ?? 7);
+  const out = render({ frames, sampleRate, spec: merged, rnd });
+  const fade = Math.min(Math.round((merged.fadeSeconds ?? 0.05) * sampleRate), Math.floor(frames / 2));
+  for (let i = 0; i < fade; i++) {
+    const gain = i / fade;
+    out[i] *= gain;
+    out[frames - 1 - i] *= gain;
+  }
+  return encodeWav([out], { sampleRate, format: merged.sampleFormat ?? 'pcm16' });
+}
+
+/**
+ * Split a WAV into fixed-length chunks and ZIP them deterministically, so the
+ * `chunks` input slot of a chunk-vocabulary engine is reproducible with the
+ * existing dependency-free `zip()` writer.
+ *
+ * Options: `chunkSeconds` (default 1), `prefix` (default `chunk`),
+ * `sampleFormat`, `mixdown`, `maxChannels`.
+ *
+ * @returns {{ entries: Map<string, Buffer>, zip: Buffer, sampleRate: number, channels: number, chunkFrames: number }}
+ */
+export function makeChunkZip(wavBuffer, options = {}) {
+  const decoded = decodeWav(wavBuffer, { mixdown: options.mixdown ?? false, maxChannels: options.maxChannels ?? 8 });
+  const chunkSeconds = options.chunkSeconds ?? 1;
+  if (!(chunkSeconds > 0)) throw new Error('sources: chunks.chunkSeconds must be a positive number');
+  const chunkFrames = Math.max(1, Math.round(chunkSeconds * decoded.sampleRate));
+  const prefix = options.prefix ?? 'chunk';
+  const format = options.sampleFormat ?? 'pcm16';
+  const entries = new Map();
+  for (let start = 0, index = 0; start < decoded.frames; start += chunkFrames, index++) {
+    const slice = decoded.channelData.map((channel) => channel.subarray(start, Math.min(start + chunkFrames, decoded.frames)));
+    entries.set(`${prefix}-${String(index).padStart(3, '0')}.wav`, encodeWav(slice, { sampleRate: decoded.sampleRate, format }));
+  }
+  return { entries, zip: zip(entries), sampleRate: decoded.sampleRate, channels: decoded.channels, chunkFrames };
+}
+
 function desiredFile(name) {
   return `${name}.png`;
 }
 
 /**
- * Write source art (and optionally a motif MIDI file) to a directory.
+ * Write source art, optional audio seeds/chunk archives, and a motif MIDI file
+ * to a directory.
  *
  * @param {{
  *   dir: string,
  *   patterns?: Record<string, object>,
+ *   audio?: Record<string, object>,
+ *   chunks?: null | { from: string, file?: string, chunkSeconds?: number, prefix?: string },
+ *   audioRecipes?: Record<string, object>,
  *   only?: string[],
  *   wanted?: Iterable<string>,
  *   motif?: false | {notes?: Array, ppq?: number, bpm?: number},
@@ -173,6 +295,9 @@ export function writeSources(options) {
   const {
     dir,
     patterns = DEFAULT_SOURCE_PATTERNS,
+    audio = {},
+    chunks = null,
+    audioRecipes = DEFAULT_AUDIO_SOURCES,
     only,
     wanted,
     motif = { notes: DEFAULT_MOTIF, ppq: 480, bpm: 60 },
@@ -181,9 +306,19 @@ export function writeSources(options) {
   fs.mkdirSync(dir, { recursive: true });
   const wantedSet = wanted ? new Set(wanted) : null;
   const filter = wantedSet && wantedSet.size > 0 ? wantedSet : null;
-  const names = only && only.length ? only : Object.keys(patterns);
+
+  if (only) {
+    for (const name of only) {
+      if (!patterns[name] && !audio[name] && name !== 'motif') {
+        throw new Error(`sources: pattern "${name}" is not defined`);
+      }
+    }
+  }
+
   const written = [];
+  const names = only && only.length ? only : Object.keys(patterns);
   for (const name of names) {
+    if (audio[name] && !patterns[name]) continue;
     if (!patterns[name]) throw new Error(`sources: pattern "${name}" is not defined`);
     const file = desiredFile(name);
     if (filter && !filter.has(file)) continue;
@@ -192,6 +327,17 @@ export function writeSources(options) {
     written.push(target);
     log(`wrote ${target}`);
   }
+
+  const audioNames = only && only.length ? only.filter((name) => audio[name]) : Object.keys(audio);
+  for (const name of audioNames) {
+    const file = `${name}.wav`;
+    if (filter && !filter.has(file)) continue;
+    const target = path.join(dir, file);
+    fs.writeFileSync(target, makeSourceAudio({ ...(audioRecipes[name] || {}), ...audio[name] }));
+    written.push(target);
+    log(`wrote ${target}`);
+  }
+
   if (motif && motif !== false) {
     const file = 'motif.mid';
     if (!filter || filter.has(file)) {
@@ -199,6 +345,23 @@ export function writeSources(options) {
       fs.writeFileSync(target, encodeMidi(motif.notes || DEFAULT_MOTIF, { ppq: motif.ppq ?? 480, bpm: motif.bpm ?? 60 }));
       written.push(target);
       log(`wrote ${target}`);
+    }
+  }
+
+  if (chunks) {
+    const fromName = chunks.from;
+    if (typeof fromName !== 'string' || !fromName) throw new Error('sources.chunks.from must name an audio source');
+    const file = chunks.file ?? `${fromName}-chunks.zip`;
+    if (!filter || filter.has(file)) {
+      const wavPath = path.join(dir, `${fromName}.wav`);
+      let wav = fs.existsSync(wavPath) ? fs.readFileSync(wavPath) : null;
+      if (!wav && audio[fromName]) wav = makeSourceAudio({ ...(audioRecipes[fromName] || {}), ...audio[fromName] });
+      if (!wav) throw new Error(`sources.chunks: "${fromName}.wav" not found (add it under sources.audio)`);
+      const result = makeChunkZip(wav, chunks);
+      const target = path.join(dir, file);
+      fs.writeFileSync(target, result.zip);
+      written.push(target);
+      log(`wrote ${target} (${result.entries.size} chunk(s))`);
     }
   }
   return written;

@@ -9,11 +9,16 @@
       "nebula": { "size": 256, "wide": 2, "palette": [0.26, 0.3, 0.5], "pattern": "stars", "contrast": 0.6, "seed": 23 },
       "macro": { "size": 256, "palette": [0.62, 0.58, 0.5], "pattern": "noise", "contrast": 0.95, "freq": 2, "seed": 31 }
     },
+    "audio": {
+      "bed-seed": { "kind": "drone", "seconds": 4, "sampleRate": 8000, "seed": 7, "baseHz": 55 }
+    },
+    "chunks": { "from": "bed-seed", "file": "bed-chunks.zip", "chunkSeconds": 1 },
     "motif": { "ppq": 480, "bpm": 60 }
   },
   "emitters": [
     { "type": "files" },
     { "type": "atlas" },
+    { "type": "audio-pack", "dir": "pack" },
     { "type": "esm", "file": "baked.mjs", "export": "BAKED", "provenance": true }
   ],
   "jobs": [
@@ -235,7 +240,8 @@
     {
       "id": "sfx-clip",
       "engine": "qrc-audio-v1",
-      "params": { "prompt": "short footstep", "seconds": 0.1, "output_format": "wav" },
+      "inputs": { "audio": "sources/bed-seed.wav" },
+      "params": { "chunk_seconds": 1, "length": 2, "crossfade": 80, "loop": true, "quality": "moderate", "seed": 11, "variation": 0.5 },
       "raw": "sfx-clip",
       "bake": {
         "type": "audio-clip",
@@ -248,6 +254,89 @@
         "loopEnd": 0.02
       },
       "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
+    },
+    {
+      "id": "bed-clip",
+      "engine": "qrc-audio-v1",
+      "inputs": { "audio": "sources/bed-seed.wav" },
+      "params": { "chunk_seconds": 1, "length": 12, "crossfade": 120, "loop": true, "quality": "moderate", "seed": 11, "variation": 0.6 },
+      "raw": "bed-clip",
+      "bake": {
+        "type": "audio-clip",
+        "name": "bed-ritual",
+        "embed": false,
+        "urlBase": "/moth/files",
+        "sampleFormat": "pcm16",
+        "mixdown": true,
+        "detectLoop": true,
+        "loopSearch": 0.08,
+        "targetSampleRate": 8000,
+        "maxSeconds": 0.05,
+        "normalize": true,
+        "peak": 0.9,
+        "meta": { "kind": "bed", "group": "ritual", "bus": "ambience" }
+      },
+      "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
+    },
+    {
+      "id": "bed-chunks",
+      "engine": "qrc-audio-v1",
+      "inputs": { "chunks": "sources/bed-chunks.zip" },
+      "params": { "length": 4, "crossfade": 60, "loop": true, "quality": "instant", "seed": 42 },
+      "raw": "bed-chunks",
+      "bake": {
+        "type": "audio-clip",
+        "name": "bed-chunks",
+        "embed": false,
+        "urlBase": "/moth/files",
+        "sampleFormat": "pcm16",
+        "mixdown": true,
+        "loopStart": 0,
+        "loopEnd": 0.04,
+        "meta": { "kind": "bed", "source": "chunks" }
+      },
+      "recorded": { "outputs": { "result": "../test/fixtures/clip-pcm16.wav" } }
+    },
+    {
+      "id": "stitch-clip",
+      "engine": "qrc-audio-v1",
+      "params": { "prompt": "two short takes, joined", "seconds": 0.1, "output_format": "wav" },
+      "raw": "stitch-clip",
+      "bake": {
+        "type": "audio-stitch",
+        "name": "bed-stitched",
+        "slots": [{ "slot": "a", "gain": 0.8 }, "b"],
+        "crossfadeMs": 5,
+        "sampleFormat": "pcm16",
+        "normalize": true,
+        "meta": { "kind": "bed", "bus": "ambience" }
+      },
+      "recorded": {
+        "outputs": {
+          "a": "../test/fixtures/clip-pcm16.wav",
+          "b": "../test/fixtures/clip-padded.wav"
+        }
+      }
+    },
+    {
+      "id": "echo-arena",
+      "engine": "otoc-echo-v1",
+      "credits": 1,
+      "params": {
+        "lattice": "square",
+        "width": 5,
+        "height": 5,
+        "depth": 8,
+        "kick": "Z",
+        "disorder": 0.15,
+        "seed": 12345,
+        "exact": true,
+        "include_taps": true,
+        "min_tap_level": 0.03
+      },
+      "raw": "echo-arena",
+      "bake": { "type": "echo-map", "name": "arena", "urlBase": "/audio/spaces", "maxTaps": 128, "meta": { "kind": "space" } },
+      "recorded": { "result": "../test/fixtures/echo-trajectory.json" }
     }
   ]
 }

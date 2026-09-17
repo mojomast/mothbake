@@ -22,7 +22,7 @@ Usage:
 Commands:
   catalog            List the engines the API exposes and their credit cost
   validate           Validate the config and report every problem
-  sources            Generate procedural source art (PNG/MIDI) locally
+  sources            Generate procedural source art (PNG/WAV/MIDI) locally
   run                Resolve jobs, bake records, and run the emitters
 
 Options:
@@ -150,7 +150,17 @@ async function commandSources(args, context) {
   }
   const only = args.only.length ? args.only : sources.only;
   const motif = sources.motif === false ? false : { notes: DEFAULT_MOTIF, ppq: 480, bpm: 60, ...(sources.motif || {}) };
-  const written = writeSources({ dir, patterns, only, wanted, motif, log: (message) => stderr(`${message}\n`) });
+  const chunks = sources.chunks === false ? null : sources.chunks;
+  const written = writeSources({
+    dir,
+    patterns,
+    audio: sources.audio || {},
+    chunks,
+    only,
+    wanted,
+    motif,
+    log: (message) => stderr(`${message}\n`),
+  });
   write(stdout, `wrote ${written.length} source file(s) to ${dir}`);
   return 0;
 }

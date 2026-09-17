@@ -8,31 +8,10 @@
 
 import path from 'node:path';
 import { wavInfo } from '../decoders/wav.mjs';
-import { requireFile } from './util.mjs';
+import { requireFile, tapsFrom } from './util.mjs';
 
 export const type = 'ir';
 export const defaultBucket = 'irs';
-
-const TAP_KEYS = ['taps', 'tap_map', 'ir', 'feedback_taps'];
-
-/** Find the first tap list under a known key, to a bounded depth. */
-function tapsFrom(value) {
-  const queue = [[value, 0]];
-  const seen = new Set();
-  while (queue.length) {
-    const [node, depth] = queue.shift();
-    if (!node || typeof node !== 'object' || depth > 4 || seen.has(node)) continue;
-    seen.add(node);
-    for (const key of TAP_KEYS) {
-      const child = node[key];
-      if (Array.isArray(child) && child.length) return child;
-    }
-    for (const child of Object.values(node)) {
-      if (child && typeof child === 'object' && !Array.isArray(child)) queue.push([child, depth + 1]);
-    }
-  }
-  return null;
-}
 
 export function bake(job, ctx) {
   const options = ctx.bake ?? {};

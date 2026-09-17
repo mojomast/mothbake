@@ -36,7 +36,7 @@ test('unknown commands and options exit 1 with a hint', async () => {
 test('validate accepts the example manifest', async () => {
   const { code, stdout, stderr } = await runCli(['validate', '--config', EXAMPLES]);
   assert.equal(code, 0);
-  assert.match(stdout, /OK — 18 job\(s\)/);
+  assert.match(stdout, /OK — 22 job\(s\)/);
   assert.equal(stderr, '');
 });
 
@@ -60,7 +60,7 @@ test('run --dry plans the recorded jobs without a key or writes', async (t) => {
   const outDir = path.join(root, 'not-created');
   const { code, stdout, stderr } = await runCli(['run', '--config', EXAMPLES, '--out', outDir, '--dry']);
   assert.equal(code, 0);
-  assert.match(stdout, /dry run — 18 job\(s\): \{"recorded":18\}/);
+  assert.match(stdout, /dry run — 22 job\(s\): \{"recorded":22\}/);
   assert.match(stderr, /rock-tile \(blur-v1\) — would read the recorded fixture, bake texture-tile/);
   assert.ok(!fs.existsSync(outDir), '--dry must not create the output directory');
 });
@@ -83,13 +83,15 @@ test('sources writes the patterns the jobs need plus a motif', async (t) => {
   const outDir = path.join(makeTmpDir(t, 'cli-sources'), 'generated');
   const { code, stdout } = await runCli(['sources', '--config', EXAMPLES, '--out', outDir]);
   assert.equal(code, 0);
-  assert.match(stdout, /wrote 3 source file\(s\)/);
+  assert.match(stdout, /wrote 5 source file\(s\)/);
   const rock = decodePng(fs.readFileSync(path.join(outDir, 'rock.png')));
   assert.equal(rock.width, 256);
   assert.equal(rock.height, 256);
   const nebula = decodePng(fs.readFileSync(path.join(outDir, 'nebula.png')));
   assert.equal(nebula.width, 512, 'wide patterns are twice as wide');
   assert.ok(decodeMidi(fs.readFileSync(path.join(outDir, 'motif.mid'))).notes.length > 0);
+  assert.ok(fs.existsSync(path.join(outDir, 'bed-seed.wav')), 'audio seeds are generated');
+  assert.ok(fs.existsSync(path.join(outDir, 'bed-chunks.zip')), 'chunk archives are generated');
   assert.ok(!fs.existsSync(path.join(outDir, 'macro.png')), 'unreferenced patterns are skipped');
 });
 
@@ -119,7 +121,7 @@ test('run completes an offline recorded bake through the CLI', async (t) => {
   const before = fs.readFileSync(EXAMPLES, 'utf8');
   const { code, stdout, stderr } = await runCli(['run', '--config', EXAMPLES, '--out', outDir]);
   assert.equal(code, 0, stderr);
-  assert.match(stdout, /baked 18 record\(s\) from 18 job\(s\)/);
+  assert.match(stdout, /baked 22 record\(s\) from 22 job\(s\)/);
   assert.match(stdout, /"textures":1/);
   assert.match(stdout, /"effects":9/);
   assert.ok(fs.existsSync(path.join(outDir, 'baked.mjs')));
@@ -138,6 +140,13 @@ test('run completes an offline recorded bake through the CLI', async (t) => {
   }
   assert.ok(fs.existsSync(path.join(outDir, 'irs', 'open-air.wav')), 'IR audio is copied next to its descriptor');
   assert.ok(fs.existsSync(path.join(outDir, 'irs', 'open-air.json')), 'IR descriptor is written');
+  assert.ok(fs.existsSync(path.join(outDir, 'pack', 'audio', 'bed-ritual.wav')), 'file-mode audio-clip is packed');
+  assert.ok(fs.existsSync(path.join(outDir, 'audio', 'bed-stitched.wav')), 'audio-stitch is written');
+  assert.ok(fs.existsSync(path.join(outDir, 'spaces', 'arena.json')), 'echo-map sidecar is written');
+  assert.ok(fs.existsSync(path.join(outDir, 'pack', 'manifest.json')), 'audio-pack manifest is written');
+  const pack = JSON.parse(fs.readFileSync(path.join(outDir, 'pack', 'manifest.json'), 'utf8'));
+  assert.ok(pack.clips['audio/bed-ritual']);
+  assert.ok(pack.spaces['spaces/arena']);
   assert.equal(fs.readFileSync(EXAMPLES, 'utf8'), before, 'recorded-only runs must not rewrite the config');
 });
 
