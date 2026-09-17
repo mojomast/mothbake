@@ -70,6 +70,12 @@ pipeline; "here" is `mothbake`.
 | `radial` | yes | yes | Identical. |
 | `portal` | yes | yes | Identical. |
 | `spark` | yes | yes | Identical. |
+| `bloom` | yes | yes | Identical, including `frame` scaling and the fixed seed default. |
+| `vortex` | yes | yes | Identical. |
+| `contract` | yes | yes | Identical. |
+| `rise` | yes | yes | Identical. |
+| `shield` | yes | yes | Identical. |
+| `snow` | yes | yes | Identical. |
 
 ### Source-art patterns
 
@@ -116,6 +122,18 @@ them and to the rights of any source material supplied.
 
 ## Sync log
 
+- **2026-09-17** — Ported the six effect value generators from upstream "Moth
+  pass 3": `bloom`, `vortex`, `contract`, `rise`, `shield` and `snow`, byte-for
+  byte with the upstream grids (same formulas, constants and per-type seed
+  defaults) and registered alongside `height`/`radial`/`portal`/`spark`.
+  Exported them from `src/values.mjs` and the package root, and added
+  determinism, bounds, seed-sensitivity and per-frame-variation tests. Added
+  offline example jobs for each effect (one frame apiece, keyed
+  `effect-explosion`, `effect-teleport`, `effect-capture-ring`, `effect-heal`,
+  `effect-shield`, `effect-weather-snow`) plus an `open-air` impulse-response
+  example with the upstream shared parameters, backed by tiny recorded grid
+  fixtures and the existing WAV/tap fixtures. Updated the README generator
+  table, `docs/ARCHITECTURE.md` and the capability matrix above.
 - **2026-09-17** — Ported the upstream `strict` run option (with the `--strict`
   CLI flag) and the `effect-frame` `effect` key alias. Added offline examples
   for the `portal` and `spark` value generators, extended the source-art example

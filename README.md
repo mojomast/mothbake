@@ -131,9 +131,10 @@ Every artifact is written under `mothbake-out/` (change it with `--out`):
 decoded files per bucket, `raw/` archives of the engine results, `index.json`,
 and the `baked.mjs` module the config asked for.
 
-A complete offline example — texture, sky, normal map, three effect frames
-(radial, portal and spark generators), LUT, motif, impulse response, an animated
-GIF sprite sheet and a trimmed audio clip — lives in
+A complete offline example — texture, sky, normal map, nine effect frames
+(radial, portal, spark, bloom, vortex, contract, rise, shield and snow
+generators), LUT, motif, two impulse responses (including an open-air room), an
+animated GIF sprite sheet and a trimmed audio clip — lives in
 [`examples/manifest.json`](examples/manifest.json):
 
 ```bash
@@ -282,6 +283,17 @@ in the config. Built-ins:
 | `radial` | expanding shock ring | `size`, `seed`, `frame` |
 | `portal` | ring with spokes and a hot core | `size`, `seed`, `frame` |
 | `spark` | bright core with needle rays | `size`, `seed`, `frame` |
+| `bloom` | explosion core inside an expanding shock ring | `size`, `seed`, `frame` |
+| `vortex` | swirling ring of arms around a bright core | `size`, `seed`, `frame` |
+| `contract` | contracting capture ring with radial ticks | `size`, `seed`, `frame` |
+| `rise` | motes rising through a soft heal column | `size`, `seed`, `frame` |
+| `shield` | expanding hexagonal bubble shell with seams | `size`, `seed`, `frame` |
+| `snow` | drifting flakes, seamless across frames | `size`, `seed`, `frame` |
+
+Every generator is pure and deterministic, returns a square `size`×`size` grid
+of values in `[0, 1]`, and for the animated families accepts a `frame` index.
+`height` also accepts `kind` (`noise` | `ridge` | `cells`); the effect families
+use a fixed per-type `seed` default when one is not given.
 
 Only `sources` writes files for patterns the jobs actually reference; the
 filter is the set of `inputs` basenames across all jobs (plus `motif.mid`).
@@ -481,9 +493,9 @@ pipeline and the rule for keeping the two in step.
 ## Examples
 
 [`examples/manifest.json`](examples/manifest.json) is a runnable config with
-texture, sky, normal map, three effect frames, LUT, motif, impulse-response,
-sprite-sheet and audio-clip jobs. Every job is recorded, so it works offline with
-no key:
+texture, sky, normal map, nine effect frames (one per generator), LUT, motif,
+two impulse-response jobs, sprite-sheet and audio-clip jobs. Every job is
+recorded, so it works offline with no key:
 
 ```bash
 node bin/mothbake.mjs validate --config examples/manifest.json
