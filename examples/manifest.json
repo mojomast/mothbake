@@ -13,6 +13,7 @@
   },
   "emitters": [
     { "type": "files" },
+    { "type": "atlas" },
     { "type": "esm", "file": "baked.mjs", "export": "BAKED", "provenance": true }
   ],
   "jobs": [
@@ -122,6 +123,31 @@
           "taps": "../test/fixtures/impulse-taps.json"
         }
       }
+    },
+    {
+      "id": "walk-sheet",
+      "engine": "qrc-image-v1",
+      "params": { "prompt": "walk cycle", "frames": 3, "output_format": "gif", "size": 8 },
+      "raw": "walk-sheet",
+      "bake": { "type": "sprite-sheet", "name": "walk", "maxWidth": 256, "dedupe": true, "powerOfTwo": false },
+      "recorded": { "outputs": { "result": "../test/fixtures/anim.gif" } }
+    },
+    {
+      "id": "sfx-clip",
+      "engine": "qrc-audio-v1",
+      "params": { "prompt": "short footstep", "seconds": 0.1, "output_format": "wav" },
+      "raw": "sfx-clip",
+      "bake": {
+        "type": "audio-clip",
+        "name": "footstep",
+        "trim": true,
+        "threshold": 0.001,
+        "normalize": true,
+        "sampleFormat": "pcm16",
+        "loopStart": 0,
+        "loopEnd": 0.02
+      },
+      "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
     }
   ]
 }

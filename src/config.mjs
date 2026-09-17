@@ -127,23 +127,28 @@ function validateBake(bake, at, context) {
   } else if (!context.bakers.includes(bake.type)) {
     error(`${at}.type`, `unknown baker "${bake.type}" (available: ${context.bakers.join(', ')})`);
   }
-  for (const key of ['name', 'bucket', 'slot', 'tapsSlot', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect']) {
+  for (const key of ['name', 'bucket', 'slot', 'tapsSlot', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'sampleFormat']) {
     if (bake[key] !== undefined && typeof bake[key] !== 'string') error(`${at}.${key}`, `bake.${key} must be a string`);
   }
-  for (const key of ['size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements']) {
+  for (const key of ['size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements', 'maxWidth', 'maxChannels']) {
     if (bake[key] === undefined) continue;
-    if (!Number.isInteger(bake[key]) || bake[key] < 0 || ((key === 'size' || key === 'width' || key === 'height') && bake[key] === 0)) {
+    if (!Number.isInteger(bake[key]) || bake[key] < 0 || (['size', 'width', 'height', 'maxWidth', 'maxChannels'].includes(key) && bake[key] === 0)) {
       error(`${at}.${key}`, `bake.${key} must be a positive integer`);
     }
   }
-  for (const key of ['fps', 'strength', 'transpose']) {
+  for (const key of ['fps', 'strength', 'transpose', 'threshold', 'pad', 'peak', 'loopStart', 'loopEnd']) {
     if (bake[key] !== undefined && (typeof bake[key] !== 'number' || !Number.isFinite(bake[key]))) {
       error(`${at}.${key}`, `bake.${key} must be a number`);
     }
   }
+  for (const key of ['powerOfTwo', 'dedupe', 'trim', 'normalize', 'mixdown']) {
+    if (bake[key] !== undefined && typeof bake[key] !== 'boolean') {
+      error(`${at}.${key}`, `bake.${key} must be a boolean`);
+    }
+  }
   if (bake.ramps !== undefined && !isPlainObject(bake.ramps)) error(`${at}.ramps`, 'bake.ramps must be an object of colour ramps');
   for (const key of Object.keys(bake)) {
-    if (['type', 'name', 'bucket', 'slot', 'tapsSlot', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'ramps', 'size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements', 'fps', 'strength', 'transpose'].includes(key)) continue;
+    if (['type', 'name', 'bucket', 'slot', 'tapsSlot', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'sampleFormat', 'ramps', 'size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements', 'maxWidth', 'maxChannels', 'fps', 'strength', 'transpose', 'threshold', 'pad', 'peak', 'loopStart', 'loopEnd', 'powerOfTwo', 'dedupe', 'trim', 'normalize', 'mixdown'].includes(key)) continue;
     warn(`${at}.${key}`, `unknown bake option "${key}" (custom bakers may accept their own options)`);
   }
 }

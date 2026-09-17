@@ -31,6 +31,15 @@ function isImageValue(value) {
   return Boolean(value) && typeof value.data === 'string' && Number.isInteger(value.width) && Number.isInteger(value.height);
 }
 
+function isSheetValue(value) {
+  return Boolean(value) && value.sheet && typeof value.sheet.data === 'string'
+    && Number.isInteger(value.sheet.width) && Number.isInteger(value.sheet.height);
+}
+
+function isAudioValue(value) {
+  return Boolean(value) && typeof value.data === 'string' && value.container === 'wav';
+}
+
 export function emit(records, ctx) {
   const { outDir, options = {}, provenance = {}, version = 1, generator = 'mothbake' } = ctx;
   const root = path.join(outDir, options.dir ?? '');
@@ -53,6 +62,20 @@ export function emit(records, ctx) {
       const relative = path.join(record.bucket, `${record.key}${suffix}.png`);
       const alpha = value.format !== 'rgb8';
       const target = write(root, relative, encodePng(value.width, value.height, fromBase64(value.data), { alpha }), written);
+      index.push({ bucket: record.bucket, key: record.key, job: record.job, type: record.type, file: posix(path.relative(outDir, target)), bytes: fs.statSync(target).size });
+      continue;
+    }
+    // A sprite-sheet record carries its packed atlas under `value.sheet`.
+    if (isSheetValue(value)) {
+      const relative = path.join(record.bucket, `${record.key}.png`);
+      const target = write(root, relative, encodePng(value.sheet.width, value.sheet.height, fromBase64(value.sheet.data), { alpha: true }), written);
+      index.push({ bucket: record.bucket, key: record.key, job: record.job, type: record.type, file: posix(path.relative(outDir, target)), bytes: fs.statSync(target).size });
+      continue;
+    }
+    // An audio-clip record carries a complete WAV under `value.data`.
+    if (isAudioValue(value)) {
+      const relative = path.join(record.bucket, `${record.key}.wav`);
+      const target = write(root, relative, Buffer.from(value.data, 'base64'), written);
       index.push({ bucket: record.bucket, key: record.key, job: record.job, type: record.type, file: posix(path.relative(outDir, target)), bytes: fs.statSync(target).size });
       continue;
     }

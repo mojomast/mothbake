@@ -23,8 +23,8 @@ const imageRecord = (overrides = {}) => ({
 const run = (records, config, outDir, extra = {}) =>
   runEmitters({ config, records, outDir, provenance: extra.provenance ?? {}, version: 1, generator: 'mothbake', log: () => {} });
 
-test('emitter registry exposes the three built-ins and defaults to files', () => {
-  assert.deepEqual(emitterTypes, ['files', 'json', 'esm']);
+test('emitter registry exposes the four built-ins and defaults to files', () => {
+  assert.deepEqual(emitterTypes, ['files', 'json', 'esm', 'atlas']);
   for (const type of emitterTypes) assert.equal(typeof emitters[type], 'function');
   assert.deepEqual(
     resolveEmitters({}).map((entry) => entry.name),

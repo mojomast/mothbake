@@ -20,7 +20,7 @@ const errorsOf = (config, options) => validateConfig(config, options).errors.map
 test('loadConfig reads the example JSON manifest', async () => {
   const loaded = await loadConfig({ file: path.join(ROOT, 'examples', 'manifest.json') });
   assert.equal(loaded.format, 'json');
-  assert.equal(loaded.config.jobs.length, 9);
+  assert.equal(loaded.config.jobs.length, 11);
   assert.equal(loaded.dir, path.join(ROOT, 'examples'));
   assert.deepEqual(validateConfig(loaded.config).errors, []);
 });
@@ -118,6 +118,22 @@ test('validateConfig requires jobs and warns about unknown keys', () => {
 test('validateConfig accepts both input and inputs, preferring inputs', () => {
   const { warnings } = validateConfig({ jobs: [baseJob({ input: { image: 'a.png' }, inputs: { image: 'b.png' } })] });
   assert.ok(warnings.some((issue) => issue.message.includes('"inputs" wins')));
+});
+
+test('validateConfig type-checks the media baker options', () => {
+  const issues = (bake) => validateConfig({ jobs: [baseJob({ bake })] });
+  const maxWidth = issues({ type: 'sprite-sheet', maxWidth: 0 });
+  assert.ok(maxWidth.errors.some((issue) => issue.path === 'jobs[0].bake.maxWidth'));
+  const boolean = issues({ type: 'audio-clip', normalize: 'yes' });
+  assert.ok(boolean.errors.some((issue) => issue.path === 'jobs[0].bake.normalize'));
+  const number = issues({ type: 'audio-clip', loopStart: 'later' });
+  assert.ok(number.errors.some((issue) => issue.path === 'jobs[0].bake.loopStart'));
+  const clean = issues({ type: 'sprite-sheet', maxWidth: 512, powerOfTwo: true, dedupe: false });
+  assert.deepEqual(clean.errors, []);
+  assert.deepEqual(clean.warnings, []);
+  const audio = issues({ type: 'audio-clip', trim: true, threshold: 0.01, pad: 0.005, normalize: true, peak: 0.9, loopStart: 0, loopEnd: 0.5, mixdown: false, sampleFormat: 'pcm24' });
+  assert.deepEqual(audio.errors, []);
+  assert.deepEqual(audio.warnings, []);
 });
 
 test('assertValidConfig throws a ConfigError carrying the issues', () => {

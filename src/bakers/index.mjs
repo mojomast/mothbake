@@ -26,8 +26,10 @@ import * as levelGraph from './level-graph.mjs';
 import * as motif from './motif.mjs';
 import * as ir from './ir.mjs';
 import * as seed from './seed.mjs';
+import * as spriteSheet from './sprite-sheet.mjs';
+import * as audioClip from './audio-clip.mjs';
 
-const modules = [textureTile, sky, materialLut, normalMap, effectFrame, levelGraph, motif, ir, seed];
+const modules = [textureTile, sky, materialLut, normalMap, effectFrame, levelGraph, motif, ir, seed, spriteSheet, audioClip];
 
 export const bakers = Object.fromEntries(modules.map((module) => [module.type, module.bake]));
 // `ir-descriptor` is an explicit alias for the `ir` baker.
