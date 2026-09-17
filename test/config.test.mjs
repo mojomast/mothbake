@@ -20,7 +20,7 @@ const errorsOf = (config, options) => validateConfig(config, options).errors.map
 test('loadConfig reads the example JSON manifest', async () => {
   const loaded = await loadConfig({ file: path.join(ROOT, 'examples', 'manifest.json') });
   assert.equal(loaded.format, 'json');
-  assert.equal(loaded.config.jobs.length, 11);
+  assert.equal(loaded.config.jobs.length, 18);
   assert.equal(loaded.dir, path.join(ROOT, 'examples'));
   assert.deepEqual(validateConfig(loaded.config).errors, []);
 });

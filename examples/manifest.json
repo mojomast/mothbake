@@ -78,6 +78,66 @@
       "recorded": { "result": "../test/fixtures/spark-grid.json" }
     },
     {
+      "id": "bloom-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "bloom", "size": 32, "frame": 0, "seed": 23 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "bloom-frame",
+      "bake": { "type": "effect-frame", "name": "effect-explosion", "index": 0, "fps": 14, "size": 48, "tint": "ember" },
+      "recorded": { "result": "../test/fixtures/bloom-grid.json" }
+    },
+    {
+      "id": "vortex-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "vortex", "size": 32, "frame": 0, "seed": 37 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "vortex-frame",
+      "bake": { "type": "effect-frame", "name": "effect-teleport", "index": 0, "fps": 12, "size": 48, "tint": "plasma" },
+      "recorded": { "result": "../test/fixtures/vortex-grid.json" }
+    },
+    {
+      "id": "contract-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "contract", "size": 32, "frame": 0, "seed": 53 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "contract-frame",
+      "bake": { "type": "effect-frame", "name": "effect-capture-ring", "index": 0, "fps": 12, "size": 48, "tint": "quantum" },
+      "recorded": { "result": "../test/fixtures/contract-grid.json" }
+    },
+    {
+      "id": "rise-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "rise", "size": 32, "frame": 0, "seed": 71 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "rise-frame",
+      "bake": { "type": "effect-frame", "name": "effect-heal", "index": 0, "fps": 10, "size": 48, "tint": "quantum" },
+      "recorded": { "result": "../test/fixtures/rise-grid.json" }
+    },
+    {
+      "id": "shield-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "shield", "size": 32, "frame": 0, "seed": 89 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "shield-frame",
+      "bake": { "type": "effect-frame", "name": "effect-shield", "index": 0, "fps": 12, "size": 48, "tint": "quantum" },
+      "recorded": { "result": "../test/fixtures/shield-grid.json" }
+    },
+    {
+      "id": "snow-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "snow", "size": 32, "frame": 0, "seed": 107 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "snow-frame",
+      "bake": { "type": "effect-frame", "name": "effect-weather-snow", "index": 0, "fps": 10, "size": 48, "tint": "quantum" },
+      "recorded": { "result": "../test/fixtures/snow-grid.json" }
+    },
+    {
       "id": "lut-pack",
       "engine": "entanglement-shader-v1",
       "credits": 1,
@@ -117,6 +177,46 @@
       },
       "raw": "cavern-ir",
       "bake": { "type": "ir", "name": "cavern", "urlBase": "/audio/irs" },
+      "recorded": {
+        "outputs": {
+          "result": "../test/fixtures/impulse.wav",
+          "taps": "../test/fixtures/impulse-taps.json"
+        }
+      }
+    },
+    {
+      "id": "ir-open-air",
+      "engine": "retrocausal-echo-v1",
+      "credits": 2,
+      "params": {
+        "emit": "audio",
+        "sr": 22050,
+        "output_format": "pcm_16",
+        "stereo_width": 1,
+        "mix": 1,
+        "include_tap_map": true,
+        "ref_floor": 0.02,
+        "ir_seconds": 1.5,
+        "lattice": "square",
+        "width": 6,
+        "height": 3,
+        "depth": 4,
+        "theta_zz": 0.7853981634,
+        "theta_x": 0.85,
+        "theta_z": 0.2,
+        "kick": "Z",
+        "disorder": 0,
+        "seed": 101,
+        "decay": 0.6,
+        "feedback": 0.25,
+        "feedback_source": "kick",
+        "diffusion_ms": 60,
+        "min_level": 0.05,
+        "max_regen": 12,
+        "negative_mode": "phase"
+      },
+      "raw": "ir-open-air",
+      "bake": { "type": "ir", "name": "open-air", "urlBase": "/audio/irs" },
       "recorded": {
         "outputs": {
           "result": "../test/fixtures/impulse.wav",
