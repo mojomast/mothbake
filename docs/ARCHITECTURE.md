@@ -27,8 +27,10 @@ carries the full issue list, which the CLI prints one line at a time.
 ### 2. Jobs
 
 A job names an engine, optional `inputs`, `params`, a `generateValues` spec, an
-optional `raw` directory name, and an optional `bake`. Jobs with `enabled:
-false` are skipped. `--only` selects by id and errors if an id does not exist.
+optional `raw` directory name, and an optional `bake`. It may also set
+`inputFrom` to reuse another job's captured output asset (see stage 3). Jobs
+with `enabled: false` are skipped. `--only` selects by id and errors if an id
+does not exist.
 
 `generateValues` is resolved offline by `src/values.mjs` and injected as
 `params.values` at resolve time. The built-ins are `height` (a seamlessly
@@ -60,6 +62,14 @@ Raw outputs are archived under `<out>/raw/<raw>/` as `<slot>.<ext>` (extension
 from `content_type`), and an inline `result` is written as `result.json`. The
 `raw` name and the `saved` map are passed to bakers, which is how the `ir` baker
 can emit a portable relative path.
+
+Each saved output also carries the API's `output_asset_id` (when present). The
+runner keeps those ids for the duration of a run and, for a JSON config, writes
+them back as `job.assetIds`, and records them in the bundle provenance as
+`<job>.outputs`. A later job can then set `inputFrom: { slot: { job, slot } }`
+to reuse an earlier artifact without re-uploading or re-paying. Resolution order
+is: this run's captured id → the persisted `assetIds` → a re-upload of the
+archived raw output → an error.
 
 Newly obtained `jobId`s are written back to JSON configs only when they change
 and when `writeBack !== false`. Module configs are never rewritten; the runner
@@ -95,13 +105,13 @@ resolved against the output dir by emitters that need the bytes.
 `bake.effect`, then the job id, so an effect can be labelled independently of
 the record key.
 
-`sprite-sheet` and `audio-clip` follow the same records-are-data rule: the GIF
-decoder composites every frame to full-screen RGBA and the baker packs those
-frames into one base64 atlas with per-frame rectangles; the WAV decoder
-normalises PCM to float channels and the baker emits a small self-contained WAV
-(base64) plus trim, gain and loop metadata. Neither bakes a consumer-specific
-shape — the `atlas` emitter and the `files` emitter decide how the bytes land on
-disk.
+`sprite-sheet` and the audio bakers follow the same records-are-data rule: the
+WAV decoder normalises PCM to float channels and `audio-clip` emits a
+self-contained WAV (base64) with trim, gain and loop metadata — or, with
+`embed: false`, a `file`/`url` reference for large clips. `audio-stitch`
+concatenates ordered slots with crossfades and `echo-map` reduces a trajectory
+envelope to a compact tap map. None bake a consumer-specific shape — the
+`atlas`, `files` and `audio-pack` emitters decide how the bytes land on disk.
 
 The built-in bakers are thin wrappers over the decoders:
 
@@ -114,7 +124,15 @@ The built-in bakers are thin wrappers over the decoders:
 | `ir` / `ir-descriptor` | `wavInfo` |
 | `sprite-sheet` | `decodeGif` |
 | `audio-clip` | `decodeWav`, `encodeWav`, `mixdownChannels` |
+| `audio-stitch` | `decodeWav`, `encodeWav`, `mixdownChannels`, `zip` (chunk inputs) |
+| `echo-map` | none (recursive JSON tap extraction) |
 | `level-graph`, `seed` | none (inline JSON) |
+
+The two audio bakers share `src/bakers/audio.mjs`: linear resampling, the
+deterministic loop-seam finder, the equal-power seam crossfade and the
+`embed`/`file`/`url` descriptor builder. `echo-map` and `ir` share the recursive
+`tapsFrom()` extractor and the `url`/`urlBase` resolver in
+`src/bakers/util.mjs`.
 
 ### 5. Bundle (`src/bundle.mjs`)
 
@@ -140,7 +158,11 @@ a `log`. The registry resolves config entries in three shapes:
 Defaults: with no `emitter`/`emitters`, a single `files` emitter runs. The
 `atlas` built-in is a specialised writer: it turns each `sprite-sheet` record
 into a PNG plus a JSON sidecar and leaves other record types untouched, so it
-composes with `files`/`json`/`esm` in one run.
+composes with `files`/`json`/`esm` in one run. The `audio-pack` built-in is the
+audio counterpart: it writes `audio-clip`/`audio-stitch`/`ir` audio and
+`echo-map`/`ir` sidecars under `<dir>/<bucket>/` plus a `manifest.json` that
+describes every clip (`url`, `seconds`, `sampleRate`, `channels`, `loopStart`,
+`loopEnd`, `gain`). Both are deterministic and idempotent.
 
 ## Extension points
 
@@ -194,11 +216,11 @@ src/api.mjs             HTTP client (engines, jobs, assets)
 src/bundle.mjs          records -> aggregate bundle
 src/values.mjs          generateValues grids
 src/noise.mjs           deterministic value noise
-src/sources.mjs         procedural source-art generator
+src/sources.mjs         procedural source art + audio seeds/chunks
 src/image.mjs           pixel/grid helpers, ramps, base64
 src/decoders/{png,gif,zip,hdr,wav,midi}.mjs
-src/bakers/*.mjs        one file per baker + registry
-src/emitters/*.mjs      files, json, esm, atlas + registry
+src/bakers/*.mjs        one file per baker + registry (+ shared audio helpers)
+src/emitters/*.mjs      files, json, esm, atlas, audio-pack + registry
 ```
 
 ## Tests
@@ -210,6 +232,7 @@ Everything runs under `node --test` and makes no external network calls:
 | Decoders, against recorded fixtures | `test/decoders.test.mjs` |
 | GIF decoding (interlace, transparency, disposal, errors) | `test/gif.test.mjs` |
 | Sprite-sheet/audio-clip bakers + atlas emitter | `test/media.test.mjs` |
+| Audio pipeline: extended `audio-clip`, `audio-stitch`, `echo-map`, `audio-pack`, source audio/chunks | `test/audio.test.mjs` |
 | Bakers, against recorded fixtures | `test/bakers.test.mjs` |
 | Values and noise determinism | `test/values.test.mjs` |
 | Source art and motif round-trips | `test/sources.test.mjs` |

@@ -60,7 +60,9 @@ pipeline; "here" is `mothbake`.
 | `ir` / `ir-descriptor` | yes | yes | Adds `tapsSlot`, `url`, `urlBase`; emits a portable relative `file`. |
 | `seed` | yes | yes | Adds `hexChars`; records the full entropy certificate. |
 | `sprite-sheet` | yes | yes | Options: `slot`, `name`, `bucket`, `maxWidth`, `powerOfTwo`, `dedupe`. |
-| `audio-clip` | yes | yes | Options: `slot`, `name`, `bucket`, `trim`, `threshold`, `pad`, `trimStart`, `trimEnd`, `normalize`, `peak`, `sampleFormat`, `loopStart`, `loopEnd`, `mixdown`, `maxChannels`. |
+| `audio-clip` | yes | yes | Options: `slot`, `name`, `bucket`, `trim`, `threshold`, `pad`, `trimStart`, `trimEnd`, `normalize`, `peak`, `sampleFormat`, `loopStart`, `loopEnd`, `mixdown`, `maxChannels`; here also `embed`, `file`, `url`/`urlBase`, `detectLoop`/`loopSearch`/`loopWindow`/`loopThreshold`, `loopCrossfade`, `targetSampleRate`, `maxSeconds`, `meta`. |
+| `audio-stitch` | yes | yes | Ordered WAV concatenation with per-slot `gain`, equal-power `crossfadeMs`, shared descriptor options and loop/crossfade support. |
+| `echo-map` | yes | yes | Recursive `extras.taps`/`data.extras.taps` extraction into a compact `{ lattice, sites, depth, seed, count, taps, irFile, irUrl }` record. |
 
 ### Value generators
 
@@ -86,6 +88,8 @@ pipeline; "here" is `mothbake`.
 | Star-band knobs (`cloudFreq`, `starDensity`) | yes | yes | — |
 | Pattern knobs (`panels`, `ribs`, `cells`) | yes | yes | — |
 | Configurable recipe set | no | yes | Here-only: recipes can come from config instead of code. |
+| Audio seed WAVs (`makeSourceAudio`: `drone`/`noise`/`pulse`) | yes | yes | Deterministic, original mono WAVs from a seed; `sources.audio`. |
+| Chunk ZIP builder (`makeChunkZip`, `sources.chunks`) | yes | yes | Splits a WAV into fixed-length chunks and writes them with the deterministic `zip()`. |
 
 ### Runner, CLI and config
 
@@ -101,6 +105,8 @@ pipeline; "here" is `mothbake`.
 | Custom bakers / generators / emitters from a module config | no | yes | Here-only extension points. |
 | Emitters (files / JSON / ESM) | partial | yes | Upstream writes one hard-coded module; here emitters are a registry. |
 | Emitter `atlas` (sprite-sheet PNG + JSON sidecar) | partial | yes | Deterministic and idempotent; composes with the other emitters. |
+| Emitter `audio-pack` (audio bundle + manifest) | partial | yes | Writes clips/IRs/spaces plus a deterministic `manifest.json`; composes with the other emitters. |
+| Output-asset-id capture + `inputFrom` chaining | yes | yes | Captures `output_asset_id`, persists `job.assetIds`, and resolves a later job's input from the run, the config, or a re-upload. |
 | API client (engines, jobs, assets, polling) | yes | yes | Injectable `fetch`/`sleep` for offline tests. |
 
 ## Deliberately not ported
@@ -122,6 +128,26 @@ them and to the rights of any source material supplied.
 
 ## Sync log
 
+- **2026-09-17** — Audio pipeline pass. Extended `audio-clip` with `embed: false`
+  plus `file`/`url`/`urlBase` file descriptors, a deterministic `detectLoop`
+  seam finder (`loopSearch`/`loopWindow`/`loopThreshold`) with an equal-power
+  `loopCrossfade`, `targetSampleRate`/`maxSeconds` size caps and a `meta`
+  passthrough. Added the `audio-stitch` baker (ordered WAV concatenation with
+  per-slot gain and crossfades) and the `echo-map` baker (recursive
+  `extras.taps`/`data.extras.taps` extraction into a compact tap map), and
+  factored their shared WAV maths into `src/bakers/audio.mjs`. Added the
+  `audio-pack` emitter (clip/IR/spaces files plus a deterministic
+  `manifest.json`). Captured `output_asset_id` into the job's saved state and
+  provenance, persisted it as `job.assetIds`, and added an `inputFrom`
+  mechanism (with config validation) so a later job can reuse an earlier asset
+  without re-paying. Added `makeSourceAudio` (deterministic seed WAVs) and
+  `makeChunkZip` (chunk archives via `zip()`) to `src/sources.mjs` with
+  `sources.audio`/`sources.chunks` config support. Added offline examples for
+  the embedded and file-mode `audio-clip`, `audio-stitch`, `echo-map` and the
+  `audio-pack` emitter, plus `test/audio.test.mjs` (loop detection, stitching
+  order/crossfades, descriptor shape, determinism and error paths) and a mock
+  asset-id chaining test. Updated the README, `docs/ARCHITECTURE.md` and this
+  matrix.
 - **2026-09-17** — Ported the six effect value generators from upstream "Moth
   pass 3": `bloom`, `vortex`, `contract`, `rise`, `shield` and `snow`, byte-for
   byte with the upstream grids (same formulas, constants and per-type seed

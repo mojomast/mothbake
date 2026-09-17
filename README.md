@@ -70,7 +70,8 @@ by a compatibility renderer.
   command exits `1` at the end. Add `--strict` to stop at the first failure.
 - **Provenance by default.** Bundles carry `engine`, `jobId`, `mode` and
   `credits` per job, and successful live submissions write their `jobId` back so
-  the next run downloads instead of paying again.
+  the next run downloads instead of paying again. Captured `output_asset_id`s
+  are persisted too, and a later job can reuse one with `inputFrom`.
 - **Deterministic output.** Bucket order is first-seen and the ESM emitter is
   covered by a byte-for-byte golden test.
 
@@ -134,7 +135,8 @@ and the `baked.mjs` module the config asked for.
 A complete offline example — texture, sky, normal map, nine effect frames
 (radial, portal, spark, bloom, vortex, contract, rise, shield and snow
 generators), LUT, motif, two impulse responses (including an open-air room), an
-animated GIF sprite sheet and a trimmed audio clip — lives in
+animated GIF sprite sheet, embedded and file-mode audio clips, a stitched clip,
+an echo map, generated audio seeds/chunks and an `audio-pack` bundle — lives in
 [`examples/manifest.json`](examples/manifest.json):
 
 ```bash
@@ -178,8 +180,8 @@ has errors (warnings are printed but do not fail the run).
 
 1. **Plan** — load and validate the config, select jobs (`--only`, `enabled`).
 2. **Resolve** — use a `recorded` fixture, reuse a cached `jobId`, or submit a
-   live job (uploading inputs, injecting generated values, polling to
-   completion).
+   live job (uploading inputs, resolving `inputFrom` assets, injecting generated
+   values, polling to completion).
 3. **Archive** — save raw outputs under `<out>/raw/<raw>/`, plus `result.json`
    for inline JSON results.
 4. **Bake** — run the job's baker over the raw outputs and inline result to
@@ -263,6 +265,12 @@ you can commit known-good results and re-bake them deterministically.
       "rock": { "size": 256, "palette": [0.5, 0.46, 0.4], "pattern": "noise", "contrast": 0.7 },
       "nebula": { "size": 256, "wide": 2, "pattern": "stars", "starDensity": 0.997 }
     },
+    "audio": {                    // name -> deterministic mono seed WAV spec
+      "bed-seed": { "kind": "drone", "seconds": 8, "sampleRate": 22050, "seed": 7 }
+    },
+    "chunks": {                   // optional ZIP of fixed-length WAV chunks
+      "from": "bed-seed", "file": "bed-chunks.zip", "chunkSeconds": 1
+    },
     "only": ["rock"],             // optional restriction
     "motif": { "ppq": 480, "bpm": 60 } // optional; false disables the MIDI file
   }
@@ -273,6 +281,14 @@ Patterns: `noise` (seamless natural material), `panels`, `rivets`, `circuit`,
 `stripes`, `corrugated`, `grating`, `diamond`, `weave`, `mesh`, `stars`.
 Shared knobs: `size`, `wide`, `palette`, `contrast`, `freq`, `seed`, plus the
 pattern-specific `panels`, `ribs`, `cells`, `cloudFreq`, `starDensity`.
+
+`sources.audio` renders deterministic, original mono seed WAVs for audio engines
+(`makeSourceAudio`): `kind` is `drone` (a slow evolving drone with soft pulses),
+`noise` (a smoothed noise bed) or `pulse`, plus `seconds`, `sampleRate`, `seed`,
+`sampleFormat`, `fadeSeconds` and kind-specific knobs. `sources.chunks` splits
+one of those seeds into fixed-length WAV chunks and ZIPs them (`makeChunkZip`)
+with the dependency-free `zip()`, for engines that take a chunk vocabulary.
+`mothbake sources` writes only the audio/chunk files a job actually references.
 
 `generateValues` synthesizes the grid some engines consume without shipping one
 in the config. Built-ins:
@@ -295,8 +311,9 @@ of values in `[0, 1]`, and for the animated families accepts a `frame` index.
 `height` also accepts `kind` (`noise` | `ridge` | `cells`); the effect families
 use a fixed per-type `seed` default when one is not given.
 
-Only `sources` writes files for patterns the jobs actually reference; the
-filter is the set of `inputs` basenames across all jobs (plus `motif.mid`).
+Only `sources` writes files the jobs actually reference; the filter is the set
+of `inputs` basenames across all jobs (patterns, audio seeds, chunk archives,
+plus `motif.mid`).
 
 ## Decoders
 
@@ -336,7 +353,9 @@ decoded output slots, the inline result, the job, and the bake options.
 | `ir` (alias `ir-descriptor`) | WAV (+ taps JSON) | `{ file, url, seconds, sampleRate, channels, format, taps }` | `slot`, `tapsSlot`, `name`, `bucket`, `maxTaps`, `url`, `urlBase` |
 | `seed` | inline JSON | `{ seed, hex, bytes, bell, commitment, certificate, … }` | `name`, `bucket`, `hexChars` |
 | `sprite-sheet` | GIF | `{ sheet: { width, height, format: 'rgba8', data }, frames: [{ index, x, y, w, h, delay, delayCs, duplicate }], loops, fps?, source }` | `slot`, `name`, `bucket`, `maxWidth`, `powerOfTwo`, `dedupe` |
-| `audio-clip` | WAV | `{ container: 'wav', format, sampleFormat, sampleRate, channels, frames, seconds, data, loopStart, loopEnd, gain, peak, trimStart, trimEnd, source }` | `slot`, `name`, `bucket`, `trim`, `threshold`, `pad`, `trimStart`, `trimEnd`, `normalize`, `peak`, `sampleFormat`, `loopStart`, `loopEnd`, `mixdown`, `maxChannels` |
+| `audio-clip` | WAV | `{ container: 'wav', format, sampleFormat, sampleRate, channels, frames, seconds, data \| file, url?, loopStart, loopEnd, gain, peak, trimStart, trimEnd, targetSampleRate?, crossfade?, loopScore?, meta?, source }` | `slot`, `name`, `bucket`, `trim`, `threshold`, `pad`, `trimStart`, `trimEnd`, `normalize`, `peak`, `sampleFormat`, `loopStart`, `loopEnd`, `mixdown`, `maxChannels`, `embed`, `url`, `urlBase`, `file`, `detectLoop`, `loopSearch`, `loopWindow`, `loopThreshold`, `loopCrossfade`, `targetSampleRate`, `maxSeconds`, `meta` |
+| `audio-stitch` | WAV slots | same as `audio-clip`, with `source: { crossfadeMs, clips: [{ slot, gain, sampleRate, frames }] }` | `slots` (alias `order`), `gains`, `crossfadeMs`, plus `mixdown`, `maxChannels`, `targetSampleRate`, `maxSeconds`, `sampleFormat`, `normalize`, `peak`, `loopStart`, `loopEnd`, `detectLoop`, `loopCrossfade`, `embed`, `url`, `urlBase`, `meta`, `name`, `bucket` |
+| `echo-map` | trajectory/media JSON | `{ lattice, sites, depth, seed, count, taps: [{ site, depth, level, polarity, fRe, fIm, x?, y?, z?, timeMs? }], irFile, irUrl, meta? }` | `slot`, `tapsSlot`, `irSlot`, `maxTaps`, `includeZ`, `name`, `bucket`, `url`, `urlBase`, `meta` |
 
 Notes:
 
@@ -361,7 +380,30 @@ Notes:
   (seconds) override auto-detection and `trim: false` disables it. The clip is
   peak-normalised to `peak` (default 1) unless `normalize: false`, and the
   applied `gain` plus the pre-normalisation `peak` are recorded. `loopStart` and
-  `loopEnd` are seconds measured from the start of the trimmed clip.
+  `loopEnd` are seconds measured from the start of the final clip.
+- Set `embed: false` on `audio-clip`/`audio-stitch` to emit `file` (the raw
+  output's relative path) and `url` (from `url` with `{raw}`/`{slot}`/`{file}`
+  placeholders, or `urlBase`) instead of base64 — the same convention as `ir`,
+  for beds and other large clips.
+- `detectLoop: true` finds a loop seam by comparing the head with candidate
+  windows near the tail using an amplitude-aware normalized difference. It
+  accepts the longest candidate at or above `loopThreshold` (default 0.5);
+  `loopSearch` and `loopWindow` are seconds. Explicit `loopStart`/`loopEnd`
+  still win, and the detected `loopScore` is recorded. `loopCrossfade` (seconds)
+  equal-power blends the tail into the head at the seam so the wrap is
+  continuous.
+- `targetSampleRate` linear-resamples (a documented approximation, no anti-alias
+  filter) and `maxSeconds` trims to keep beds small. `meta` is copied into the
+  record verbatim, so routing hints (`bus`, `kind`, `tags`) are baked rather
+  than hard-coded.
+- `audio-stitch` concatenates ordered WAV slots (`slots`/`order`, entries are a
+  slot name or `{ slot, gain }`); `gains` supplies a parallel gain array and
+  `crossfadeMs` equal-power joins each pair. Output is an `audio-clip`-shaped
+  record, so `files` and `audio-pack` already understand it.
+- `echo-map` reduces a trajectory/media envelope to a compact tap map, searching
+  `extras.taps`, `extras.tap_map.taps` and `data.extras.taps` recursively. It
+  keeps the first `maxTaps` taps and links the trajectory as `irFile`/`irUrl`
+  for chaining. `includeZ` keeps a `z` component when the source has one.
 
 ## Emitters
 
@@ -391,6 +433,7 @@ Built-ins:
 | `json` | one aggregate bundle: `{ version, generator, provenance, <buckets…> }` | `file`, `pretty`, `provenance`, `shape` (`buckets` \| `records`) |
 | `esm` | a generated module: `export const <name> = …; export default <name>;` | `file`, `export`, `defaultExport`, `header`, `provenance`, `shape` |
 | `atlas` | `<bucket>/<key>.png` for each sprite-sheet record plus a `<bucket>/<key>.json` sidecar with the animation metadata; deterministic and idempotent | `dir`, `sidecar`, `pretty` |
+| `audio-pack` | a self-contained audio bundle: `<bucket>/<key>.wav` for `audio-clip`/`audio-stitch` (decoded or copied) and `ir`, `<bucket>/<key>.json` sidecars for `echo-map`/`ir`, and `manifest.json` (`{ version, generator, provenance, clips, spaces, irs }`) where each clip carries `url`, `seconds`, `sampleRate`, `channels`, `loopStart`, `loopEnd` and `gain` | `dir`, `manifest` (filename or `false`), `pretty`, `sidecar` |
 
 ```jsonc
 {
@@ -433,15 +476,89 @@ or several at once:
         "loopEnd": 0.02
       },
       "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
+    },
+    {
+      "id": "bed-clip",
+      "engine": "qrc-audio-v1",
+      "bake": {
+        "type": "audio-clip",
+        "name": "bed-ritual",
+        "embed": false,                 // emit a file descriptor, not base64
+        "urlBase": "/moth/files",
+        "detectLoop": true,             // find a seamless loop seam
+        "targetSampleRate": 22050,
+        "meta": { "kind": "bed", "bus": "ambience" }
+      },
+      "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
+    },
+    {
+      "id": "stitch-clip",
+      "engine": "qrc-audio-v1",
+      "bake": {
+        "type": "audio-stitch",
+        "name": "bed-stitched",
+        "slots": ["a", { "slot": "b", "gain": 0.8 }],
+        "crossfadeMs": 5
+      },
+      "recorded": {
+        "outputs": {
+          "a": "../test/fixtures/clip-pcm16.wav",
+          "b": "../test/fixtures/clip-padded.wav"
+        }
+      }
+    },
+    {
+      "id": "echo-arena",
+      "engine": "otoc-echo-v1",
+      "bake": { "type": "echo-map", "name": "arena", "urlBase": "/audio/spaces", "maxTaps": 128 },
+      "recorded": { "result": "../test/fixtures/echo-trajectory.json" }
     }
   ],
-  "emitters": [{ "type": "atlas" }, { "type": "files" }]
+  "emitters": [{ "type": "atlas" }, { "type": "audio-pack", "dir": "audio" }]
 }
 ```
 
 The `atlas` emitter writes `sprites/walk.png` plus `sprites/walk.json`
-(`{ width, height, sheet, frames, loops, fps }`); `files` writes
-`audio/footstep.wav` from the normalised clip.
+(`{ width, height, sheet, frames, loops, fps }`). The `audio-pack` emitter
+writes a self-contained bundle plus `manifest.json`:
+
+```
+audio/audio/bed-ritual.wav   audio/audio/bed-stitched.wav
+audio/spaces/arena.json      audio/manifest.json
+```
+
+The `files` emitter is still the default when no `emitter` is configured; it
+writes the embedded clips as `<bucket>/<key>.wav` and structured records as
+JSON, and copies an `ir`/`audio-clip` file next to its descriptor.
+
+### Reusing engine outputs (asset-id chaining)
+
+Some engines return a reusable artifact — a trained `model`, a `state`
+trajectory, an impulse response — that a later job can consume. The runner
+captures each output's `output_asset_id` into the job's saved state and, on a
+JSON config, writes it back as `assetIds`, so a later run does not have to pay
+for the source job again:
+
+```jsonc
+{
+  "jobs": [
+    { "id": "train", "engine": "qrc-train-v2", "bake": { "type": "seed", "name": "train-seed" } },
+    {
+      "id": "gen",
+      "engine": "qrc-gen-v2",
+      "inputFrom": { "model": { "job": "train", "slot": "model" } },
+      "bake": { "type": "motif", "name": "generated" }
+    }
+  ]
+}
+```
+
+`inputFrom` maps an input slot to `{ job, slot }` (or the `"job/slot"`
+shorthand; `slot` defaults to the input's own name). Resolution order is: this
+run's captured asset id, then the referenced job's persisted `assetIds`, then a
+re-upload of that job's archived raw output, then an error. An explicit
+`inputFrom` wins over an `inputs` file for the same slot. The captured ids also
+appear in the bundle provenance under `<job>.outputs`.
 
 ## Extend it
 
@@ -494,8 +611,10 @@ pipeline and the rule for keeping the two in step.
 
 [`examples/manifest.json`](examples/manifest.json) is a runnable config with
 texture, sky, normal map, nine effect frames (one per generator), LUT, motif,
-two impulse-response jobs, sprite-sheet and audio-clip jobs. Every job is
-recorded, so it works offline with no key:
+two impulse-response jobs, sprite-sheet jobs, embedded and file-mode
+`audio-clip` jobs, an `audio-stitch` bed, an `echo-map`, generated audio
+seeds/chunks and the `audio-pack` emitter. Every job is recorded, so it works
+offline with no key:
 
 ```bash
 node bin/mothbake.mjs validate --config examples/manifest.json
