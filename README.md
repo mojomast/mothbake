@@ -68,10 +68,16 @@ by a compatibility renderer.
   run the *same* pipeline with no key and no network.
 - **Failures are per job.** One bad job is reported and the rest still run; the
   command exits `1` at the end. Add `--strict` to stop at the first failure.
+- **Offline repair.** `mothbake repair` rebuilds the purely local, file-derived
+  records (`ir`, `echo-map`, `audio-clip`, `audio-stitch`) from the raw outputs a
+  run already archived, then re-runs the emitters — no API key and no credits,
+  so a baker fix can be re-applied to a committed bake.
 - **Provenance by default.** Bundles carry `engine`, `jobId`, `mode` and
   `credits` per job, and successful live submissions write their `jobId` back so
-  the next run downloads instead of paying again. Captured `output_asset_id`s
-  are persisted too, and a later job can reuse one with `inputFrom`.
+  the next run downloads instead of paying again. A recorded job that is not
+  `completed` is never silently resubmitted: the run fails and names `--force`.
+  Captured `output_asset_id`s are persisted too, and a later job can reuse one
+  with `inputFrom`.
 - **Deterministic output.** Bucket order is first-seen and the ESM emitter is
   covered by a byte-for-byte golden test.
 
@@ -153,6 +159,7 @@ Commands:
   validate    Validate the config and report every problem
   sources     Generate procedural source art (PNG/MIDI) locally
   run         Resolve jobs, bake records, and run the emitters
+  repair      Rebuild local records from raw outputs, without the API
 
 Options:
   -c, --config <file>  Config file (default: mothbake.config.mjs / .js / mothbake.json)
@@ -167,7 +174,8 @@ Options:
 ```
 
 `run` exits non-zero if any job fails. `validate` exits non-zero if the config
-has errors (warnings are printed but do not fail the run).
+has errors (warnings are printed but do not fail the run). `repair` exits
+non-zero if a selected local job has no raw archive or cannot be rebuilt.
 
 ### Environment
 
@@ -179,9 +187,9 @@ has errors (warnings are printed but do not fail the run).
 ### What a run does
 
 1. **Plan** — load and validate the config, select jobs (`--only`, `enabled`).
-2. **Resolve** — use a `recorded` fixture, reuse a cached `jobId`, or submit a
-   live job (uploading inputs, resolving `inputFrom` assets, injecting generated
-   values, polling to completion).
+2. **Resolve** — use a `recorded` fixture, reuse a cached `completed` `jobId`,
+   or submit a live job (uploading inputs, resolving `inputFrom` assets,
+   injecting generated values, polling to completion).
 3. **Archive** — save raw outputs under `<out>/raw/<raw>/`, plus `result.json`
    for inline JSON results.
 4. **Bake** — run the job's baker over the raw outputs and inline result to
@@ -193,6 +201,32 @@ at the end. Pass `--strict` (or `strict: true` to `runConfig`) to stop at the
 first failure instead. Successful live submissions record their `jobId` back
 into a JSON config, so re-running downloads the existing result instead of
 paying for another run. Add `--force` to submit fresh jobs anyway.
+
+A cached `jobId` is only reused when the API confirms that job is `completed`.
+If it is failed, cancelled, still running, unknown, or its status cannot be
+verified, the run **fails** with a message naming `--force` instead of quietly
+submitting a new job — a re-download or offline re-run must never spend credits
+by accident.
+
+### Offline repair
+
+`mothbake repair` rebuilds the purely local, file-derived records from the raw
+outputs already archived under `<out>/raw/<raw>/`, then re-runs the configured
+emitters. No API key, no network and no credits:
+
+```bash
+node bin/mothbake.mjs run --config examples/manifest.json --out out/examples
+# delete the emitted artifacts, keep out/examples/raw, then:
+node bin/mothbake.mjs repair --config examples/manifest.json --out out/examples
+node bin/mothbake.mjs repair --config examples/manifest.json --out out/examples --only bed-clip
+```
+
+The local set is `ir`/`ir-descriptor`, `echo-map`, `audio-clip` and
+`audio-stitch`. It includes `audio-clip` with `embed: false` (a WAV written
+beside its descriptor), so a file-derived clip is rebuildable exactly like an
+`ir` or `echo-map`. `repair` emits only the rebuilt records; scope it with
+`--only`, or a config of those jobs, if an aggregate emitter should not be
+rewritten with just the repaired records.
 
 ## Configuration
 

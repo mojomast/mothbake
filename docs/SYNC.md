@@ -96,7 +96,8 @@ pipeline; "here" is `mothbake`.
 | Feature | Upstream | Here | Notes |
 | --- | --- | --- | --- |
 | Recorded fixtures (offline runs) | no | yes | Here-only; used by tests and examples. |
-| Cached `jobId` reuse and `--force` | yes | yes | Here writes ids back only when they change. |
+| Cached `jobId` reuse and `--force` | yes | yes | Here writes ids back only when they change. A recorded job that is not `completed` (failed, cancelled, running, unknown, or unverifiable) is never auto-resubmitted: the run fails with a clear message and requires `--force`. |
+| Offline repair from raw outputs (`repair`) | yes (`LOCAL_BAKE_TYPES`: `ir`, `echo-map`) | yes (`LOCAL_BAKE_TYPES`: `ir`/`ir-descriptor`, `echo-map`, `audio-clip`, `audio-stitch`) | Here rebuilds the local records from `<out>/raw/<raw>/` and runs the emitters, with no API key and no credits. Includes the file-derived `audio-clip` (`embed: false`) so it is rebuildable beside its descriptor. |
 | Dry run without network or writes | yes | yes | Here also reports a per-job action plan. |
 | Stop at the first failure (`strict`) | yes | yes | Library option plus the `--strict` flag. |
 | `--only` selection | yes | yes | Here also accepts repeats and comma-separated ids, and validates them. |
@@ -119,6 +120,12 @@ These are private-consumer concerns, so they stay upstream:
 - Branded identifiers, private paths and API credentials.
 - The consuming runtime's module shape. Here it is one possible `esm` emitter
   config, not a special case.
+- The upstream `repairModule`'s in-place patch of one generated module. Here
+  records are data and emitters are a registry, so `mothbake repair` re-runs the
+  configured emitters over the rebuilt local records instead of editing a single
+  module. It is scoped to `LOCAL_BAKE_TYPES` (the same subset upstream rebuilds);
+  run it with `--only` (or a config of those jobs) when you do not want the
+  aggregate emitters to contain only the repaired records.
 
 ## Output rights
 
@@ -128,6 +135,24 @@ them and to the rights of any source material supplied.
 
 ## Sync log
 
+- **2026-09-18** — Offline repair and cached-job safety. Added `src/repair.mjs`
+  (`LOCAL_BAKE_TYPES`, `isLocalBake`, `readRawResults`, `rebuildLocalBakes`,
+  `repairConfig`) and the `mothbake repair` command. It rebuilds the purely
+  local, file-derived records from the raw outputs a run already archived under
+  `<out>/raw/<raw>/` and re-runs the configured emitters, with no API key and no
+  credits. The local set now covers the file-derived `audio-clip` (`embed: false`,
+  writing a WAV beside the descriptor) and `audio-stitch` alongside
+  `ir`/`ir-descriptor` and `echo-map`, closing the parity gap with the upstream
+  `LOCAL_BAKE_TYPES`/`rebuildLocalBakes` path. Guarded the runner's cached-job
+  path: a recorded `jobId` whose status is not `completed` (failed, cancelled,
+  running, unknown) — or whose status cannot be verified — is no longer silently
+  resubmitted, which would spend credits; the job now fails with a clear message
+  that names `--force`. The `completed` reuse path is unchanged. Added
+  `test/repair.test.mjs` (local-type coverage, raw-result reading, offline
+  rebuild, changed-raw rebuild, determinism, missing-archive errors, CLI
+  `--only` and a no-key CLI repair) and extended `test/mock-server.test.mjs` with
+  completed-reuse, failed, unknown-status, unverifiable-status and `--force`
+  cases. Updated the README, `docs/ARCHITECTURE.md` and this matrix.
 - **2026-09-17** — Audio pipeline pass. Extended `audio-clip` with `embed: false`
   plus `file`/`url`/`urlBase` file descriptors, a deterministic `detectLoop`
   seam finder (`loopSearch`/`loopWindow`/`loopThreshold`) with an equal-power

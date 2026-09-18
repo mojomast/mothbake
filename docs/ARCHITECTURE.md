@@ -49,7 +49,11 @@ Resolution has three paths, in order:
 1. **Recorded** (`job.recorded`, skipped by `--force`) — read local files, no
    API, no key.
 2. **Cached** (`job.jobId`, skipped by `--force`) — check the job status; if it
-   is `completed`, fetch the result.
+   is `completed`, fetch the result. Any other outcome — `failed`, `cancelled`,
+   still running, an unrecognized status, or a status request that errors — does
+   **not** fall through to a fresh submission: it fails the job with a message
+   that names `--force`, because an automatic resubmission would spend credits
+   when the user only meant to reuse a result.
 3. **Live** — upload inputs (`create asset` → presigned `PUT` → `complete`),
    inject `params.values` from `generateValues`, `POST …/process`, poll
    `…/status`, fetch `…/result`.
@@ -164,6 +168,27 @@ audio counterpart: it writes `audio-clip`/`audio-stitch`/`ir` audio and
 describes every clip (`url`, `seconds`, `sampleRate`, `channels`, `loopStart`,
 `loopEnd`, `gain`). Both are deterministic and idempotent.
 
+### 7. Repair (`src/repair.mjs`)
+
+`mothbake repair` is the offline counterpart of a run: it rebuilds the purely
+local, file-derived records from the raw outputs a previous run archived under
+`<out>/raw/<raw>/`, then re-runs the configured emitters — no API key, no
+credits. `readRawResults()` maps `<slot>.<ext>` back onto declared slot names
+and reads `result.json` as the inline result, so a baker sees exactly the
+`{ files, saved, result }` shape a normal resolve produces (including the
+relative `file` an `ir`/`audio-clip` descriptor points at).
+
+`LOCAL_BAKE_TYPES` (`ir`/`ir-descriptor`, `echo-map`, `audio-clip`,
+`audio-stitch`) is the set whose inputs are entirely local. It is the portable
+counterpart of the upstream repair path and deliberately includes the
+file-derived `audio-clip` (`embed: false`), which writes a WAV beside its
+descriptor, so a baker fix can be re-applied without re-paying for the engine
+run. `rebuildLocalBakes()` is pure over the filesystem and collects missing
+archives and baker errors as `failures`; `repairConfig()` emits the rebuilt
+records. Because it re-runs the emitters over only those records, scope it with
+`--only` (or a config of the local jobs) if the aggregate emitters should not
+contain just the repaired records.
+
 ## Extension points
 
 | Want to… | Do this |
@@ -212,6 +237,7 @@ bin/mothbake.mjs        thin wrapper -> src/cli.mjs
 src/cli.mjs             argument parsing, commands, exit codes
 src/config.mjs          load + validate
 src/runner.mjs          resolve/archive/bake/emit orchestration
+src/repair.mjs          offline rebuild of local records from raw outputs
 src/api.mjs             HTTP client (engines, jobs, assets)
 src/bundle.mjs          records -> aggregate bundle
 src/values.mjs          generateValues grids
@@ -238,7 +264,8 @@ Everything runs under `node --test` and makes no external network calls:
 | Source art and motif round-trips | `test/sources.test.mjs` |
 | Config loading and validation messages | `test/config.test.mjs` |
 | CLI help, validate, `--dry`, sources, offline run | `test/cli.test.mjs` |
-| Submit → poll → download → bake → emit against a mock API | `test/mock-server.test.mjs` |
+| Submit → poll → download → bake → emit against a mock API; cached-job reuse and the failed/unknown-status guard | `test/mock-server.test.mjs` |
+| Offline repair from raw outputs (`repair`, `LOCAL_BAKE_TYPES`) | `test/repair.test.mjs` |
 | Emitters (files/json/esm, custom) | `test/emitters.test.mjs` |
 | ESM emitter byte-for-byte golden | `test/golden.test.mjs` + `test/golden/baked.golden.mjs` |
 | Runner helpers (selection, dry plans, write-back) | `test/runner.test.mjs` |
