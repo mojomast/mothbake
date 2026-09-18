@@ -12,7 +12,7 @@ import { loadConfig } from '../src/config.mjs';
 import { runConfig } from '../src/runner.mjs';
 import { fixture, makeTmpDir, readFixture, writeJson } from './helpers.mjs';
 
-function startMockApi(t) {
+function startMockApi(t, options = {}) {
   const state = {
     requests: [],
     submits: [],
@@ -31,7 +31,7 @@ function startMockApi(t) {
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(value));
       };
-      const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/(job-\d+)\/(status|result)$/);
+      const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/(status|result)$/);
 
       if (req.method === 'GET' && url.pathname === '/api/v1/engines') {
         return json(200, {
@@ -53,6 +53,11 @@ function startMockApi(t) {
       }
       if (jobMatch && jobMatch[2] === 'status') {
         const id = jobMatch[1];
+        if (options.statuses && options.statuses[id]) return json(200, options.statuses[id]);
+        if (options.statusErrors && options.statusErrors[id]) {
+          const failure = options.statusErrors[id];
+          return json(failure.http ?? 500, { detail: failure.detail ?? 'status unavailable' });
+        }
         const submission = state.submits[Number(id.split('-')[1]) - 1];
         if (submission?.params?.fail === true) {
           return json(200, { status: 'failed', error: { message: 'engine exploded' } });
@@ -349,4 +354,82 @@ test('inputFrom reuses output asset ids and falls back to re-upload', async (t) 
   // Asset ids persist into the JSON config so a later run skips the re-upload.
   const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.deepEqual(saved.jobs[0].assetIds, { model: 'asset-state-1' });
+});
+
+// A recorded jobId must only be reused when the API confirms `completed`.
+// Anything else refuses to submit a fresh job: an automatic resubmission would
+// spend credits when the user only meant to re-download or re-run offline.
+test('a recorded job that is completed is still reused without a new submission', async (t) => {
+  const dir = makeTmpDir(t, 'mock-reuse-completed');
+  const config = { jobs: [{ id: 'reuse', engine: 'blur-core-v1', jobId: 'job-old', raw: 'reuse', bake: { type: 'normal-map', name: 'reused', size: 8 } }] };
+  const { base, state } = await startMockApi(t, { statuses: { 'job-old': { status: 'completed' } } });
+
+  const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, sleepImpl: async () => {}, log: () => {} });
+
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.records.length, 1);
+  assert.equal(state.submits.length, 0, 'a completed job is reused, never resubmitted');
+  assert.equal(result.provenance.reuse.jobId, 'job-old');
+});
+
+test('a recorded failed job is not auto-resubmitted and demands --force', async (t) => {
+  const dir = makeTmpDir(t, 'mock-reuse-failed');
+  const config = { jobs: [{ id: 'retry', engine: 'blur-v1', jobId: 'job-old', raw: 'retry', bake: { type: 'texture-tile', name: 'retry', size: 8 } }] };
+  const { base, state } = await startMockApi(t, { statuses: { 'job-old': { status: 'failed', error: { message: 'engine exploded' } } } });
+
+  const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, sleepImpl: async () => {}, log: () => {} });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].message, /recorded job "retry" \(job-old\) is failed, not completed/);
+  assert.match(result.failures[0].message, /--force/);
+  assert.equal(state.submits.length, 0, 'a failed recorded job must not be auto-resubmitted');
+});
+
+test('a recorded job with an unknown status is not auto-resubmitted', async (t) => {
+  const dir = makeTmpDir(t, 'mock-reuse-unknown');
+  const config = { jobs: [{ id: 'maybe', engine: 'blur-v1', jobId: 'job-old', raw: 'maybe', bake: { type: 'texture-tile', name: 'maybe', size: 8 } }] };
+  const { base, state } = await startMockApi(t, { statuses: { 'job-old': { progress: { step: 'queued' } } } });
+
+  const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, sleepImpl: async () => {}, log: () => {} });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].message, /recorded job "maybe" \(job-old\) is unknown, not completed/);
+  assert.match(result.failures[0].message, /--force/);
+  assert.equal(state.submits.length, 0, 'an unknown-status recorded job must not be auto-resubmitted');
+});
+
+test('a recorded job whose status cannot be verified is not auto-resubmitted', async (t) => {
+  const dir = makeTmpDir(t, 'mock-reuse-error');
+  const config = { jobs: [{ id: 'unverified', engine: 'blur-v1', jobId: 'job-old', raw: 'unverified', bake: { type: 'texture-tile', name: 'unverified', size: 8 } }] };
+  const { base, state } = await startMockApi(t, { statusErrors: { 'job-old': { http: 503, detail: 'service unavailable' } } });
+
+  const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, sleepImpl: async () => {}, log: () => {} });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].message, /recorded job "unverified" \(job-old\) could not be verified/);
+  assert.match(result.failures[0].message, /--force/);
+  assert.equal(state.submits.length, 0, 'an unverifiable recorded job must not be auto-resubmitted');
+});
+
+test('--force resubmits a recorded failed job', async (t) => {
+  const dir = makeTmpDir(t, 'mock-reuse-force');
+  fs.mkdirSync(path.join(dir, 'sources'), { recursive: true });
+  fs.copyFileSync(fixture('tile.png'), path.join(dir, 'sources', 'tile.png'));
+  const config = {
+    jobs: [{
+      id: 'retry',
+      engine: 'blur-v1',
+      jobId: 'job-old',
+      inputs: { image: 'sources/tile.png' },
+      raw: 'retry',
+      bake: { type: 'texture-tile', name: 'retry', size: 8 },
+    }],
+  };
+  const { base, state } = await startMockApi(t, { statuses: { 'job-old': { status: 'failed', error: { message: 'engine exploded' } } } });
+
+  const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, force: true, sleepImpl: async () => {}, log: () => {} });
+
+  assert.deepEqual(result.failures, []);
+  assert.equal(state.submits.length, 1, '--force submits a fresh job');
+  assert.equal(result.records.length, 1);
 });

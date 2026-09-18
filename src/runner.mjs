@@ -145,13 +145,26 @@ async function resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log
 async function resolveLiveResult({ api, job, inputs, inputFrom, config, runAssets, configDir, outDir, force, log, generatorRegistry }) {
   if (job.jobId && !force) {
     log(`  reusing job ${job.jobId}`);
+    // A recorded job id is only reused when the API confirms it is still
+    // `completed`. Anything else — failed, cancelled, still running, an
+    // unrecognized status, or a status request that errors — must never fall
+    // through to a fresh submission: that would silently spend credits when the
+    // user only meant to re-download an existing result. Require `--force`.
+    let status;
     try {
-      const status = await api.jobStatus(job.jobId);
-      if (status?.status === 'completed') return api.jobResult(job.jobId);
-      log(`  recorded job is ${status?.status ?? 'unknown'}; submitting a fresh one`);
+      status = await api.jobStatus(job.jobId);
     } catch (error) {
-      log(`  could not reuse job ${job.jobId}: ${error.message}; submitting a fresh one`);
+      throw new Error(
+        `recorded job "${job.id}" (${job.jobId}) could not be verified: ${error.message}. `
+          + 'Refusing to submit a fresh job automatically; pass --force to submit one (this spends credits).',
+      );
     }
+    if (status?.status === 'completed') return api.jobResult(job.jobId);
+    const state = status?.status ?? 'unknown';
+    throw new Error(
+      `recorded job "${job.id}" (${job.jobId}) is ${state}, not completed. `
+        + 'Refusing to submit a fresh job automatically; pass --force to submit one (this spends credits).',
+    );
   }
   const fromAssets = await resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log });
   const inputEntries = Object.entries(inputs);
