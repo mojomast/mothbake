@@ -21,6 +21,7 @@
     "./decoders/*": "./src/decoders/*.mjs",
     "./emitters": "./src/emitters/index.mjs",
     "./image": "./src/image.mjs",
+    "./repair": "./src/repair.mjs",
     "./runner": "./src/runner.mjs",
     "./sources": "./src/sources.mjs",
     "./values": "./src/values.mjs"

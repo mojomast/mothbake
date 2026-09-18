@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createApi, readKey, resolveBaseUrl } from './api.mjs';
 import { formatIssue, loadConfig, validateConfig } from './config.mjs';
 import { jobsRequiringApi, runConfig } from './runner.mjs';
+import { repairConfig } from './repair.mjs';
 import { DEFAULT_MOTIF, DEFAULT_SOURCE_PATTERNS, writeSources } from './sources.mjs';
 import { emitterTypes } from './emitters/index.mjs';
 import { bakerTypes } from './bakers/index.mjs';
@@ -24,6 +25,7 @@ Commands:
   validate           Validate the config and report every problem
   sources            Generate procedural source art (PNG/WAV/MIDI) locally
   run                Resolve jobs, bake records, and run the emitters
+  repair             Rebuild local records from raw outputs, without the API
 
 Options:
   -c, --config <file>  Config file (default: mothbake.config.mjs / .js / mothbake.json)
@@ -47,6 +49,7 @@ Examples:
   mothbake validate
   mothbake sources --config examples/manifest.json
   mothbake run --config examples/manifest.json --out out/examples
+  mothbake repair --config examples/manifest.json --out out/examples
   mothbake run --only rock-tile --force
 `;
 
@@ -205,11 +208,35 @@ async function commandRun(args, context) {
   return 0;
 }
 
+async function commandRepair(args, context) {
+  const { stdout, stderr } = context;
+  const loaded = await loadValidatedConfig(args, context);
+  const { config, dir } = loaded;
+  const outDir = path.resolve(context.cwd, args.out ?? 'mothbake-out');
+  const result = await repairConfig({
+    config,
+    configDir: dir,
+    outDir,
+    only: args.only,
+    log: (message) => stderr(`${message}\n`),
+  });
+  write(
+    stdout,
+    `repaired ${result.records.length} record(s) into ${outDir} · ${JSON.stringify(result.buckets)} · failed: ${result.failures.length}`,
+  );
+  if (result.failures.length) {
+    for (const failure of result.failures) stderr(`failed: ${failure.id} — ${failure.message}\n`);
+    return 1;
+  }
+  return 0;
+}
+
 const COMMANDS = {
   catalog: commandCatalog,
   validate: commandValidate,
   sources: commandSources,
   run: commandRun,
+  repair: commandRepair,
 };
 
 /**
