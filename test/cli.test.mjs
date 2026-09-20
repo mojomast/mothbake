@@ -71,6 +71,13 @@ test('run --only with an unknown id exits 1 and lists the known ids', async (t) 
   assert.equal(code, 1);
   assert.match(stderr, /--only did not match any job: nope/);
   assert.match(stderr, /rock-tile/);
+
+  // A comma-separated list with one valid and one unknown id must fail before
+  // running anything, never silently skip the typo.
+  const mixed = await runCli(['run', '--config', EXAMPLES, '--only', 'rock-tile,nope', '--out', outDir]);
+  assert.equal(mixed.code, 1);
+  assert.match(mixed.stderr, /--only did not match any job: nope/);
+  assert.ok(!fs.existsSync(outDir), 'a failed --only selection writes nothing');
 });
 
 test('catalog requires MOTH_API_KEY', async () => {

@@ -8,12 +8,19 @@
 //   <outDir>/irs/cavern.wav             IR audio is copied, descriptor alongside
 //   <outDir>/index.json                 manifest of everything written
 //
-// Options: { dir?, index? }.
+// Options: { dir?, index?, indexFile?, merge? }.
+//
+// Every file is written atomically, and structured record values are validated
+// as exact JSON before they land. `merge: true` merges the previous index.json
+// (entries keyed by file path, provenance unioned) so a partial run keeps the
+// manifest of everything already on disk; the files themselves are never
+// deleted either way.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { encodePng } from '../decoders/png.mjs';
 import { fromBase64 } from '../image.mjs';
+import { assertJsonSafe, mergeIndex, readJsonArtifact, validateForPublish, writeFileAtomic } from '../publish.mjs';
 
 export const name = 'files';
 
@@ -21,8 +28,7 @@ const posix = (value) => value.split(path.sep).join('/');
 
 function write(root, relative, data, written) {
   const target = path.join(root, relative);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, data);
+  writeFileAtomic(target, data);
   written.push(target);
   return target;
 }
@@ -81,6 +87,7 @@ export function emit(records, ctx) {
     }
     // Structured records (and IR descriptors) are written as JSON. An IR also
     // copies its audio file so the bundle is self-contained.
+    assertJsonSafe(value, `files emitter (${record.bucket}.${record.key})`);
     const jsonRelative = path.join(record.bucket, `${record.key}.json`);
     const jsonTarget = write(root, jsonRelative, `${JSON.stringify(value, null, 2)}\n`, written);
     index.push({ bucket: record.bucket, key: record.key, job: record.job, type: record.type, file: posix(path.relative(outDir, jsonTarget)), bytes: fs.statSync(jsonTarget).size });
@@ -96,9 +103,14 @@ export function emit(records, ctx) {
   }
 
   if (options.index !== false) {
-    const indexFile = path.join(outDir, options.indexFile ?? 'index.json');
-    fs.mkdirSync(path.dirname(indexFile), { recursive: true });
-    fs.writeFileSync(indexFile, `${JSON.stringify({ version, generator, provenance, files: index }, null, 2)}\n`);
+    const indexName = options.indexFile ?? 'index.json';
+    const indexFile = path.join(outDir, indexName);
+    const label = `files emitter (${indexName})`;
+    const fresh = { version, generator, provenance, files: index };
+    const previous = options.merge ? readJsonArtifact(indexFile, label) : null;
+    const data = options.merge ? mergeIndex(previous, fresh) : fresh;
+    validateForPublish(data, { expectedProvenance: Object.keys(provenance), label });
+    writeFileAtomic(indexFile, `${JSON.stringify(data, null, 2)}\n`);
     written.push(indexFile);
   }
   return written;

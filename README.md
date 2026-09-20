@@ -72,6 +72,13 @@ by a compatibility renderer.
   records (`ir`, `echo-map`, `audio-clip`, `audio-stitch`) from the raw outputs a
   run already archived, then re-runs the emitters — no API key and no credits,
   so a baker fix can be re-applied to a committed bake.
+- **Merge-safe publication.** Aggregate emitters can opt into `merge: true`, so
+  a partial run (`--only`, disabled jobs, or a failed job) overlays this run's
+  records on the previous artifact instead of dropping everything it did not
+  just bake. Writes are atomic (same-directory temp + rename) and validated as
+  exact JSON first: NaN, `undefined`, array holes, cycles and non-plain objects
+  are rejected with the offending path, and a rejected write leaves the
+  previous artifact byte-identical.
 - **Provenance by default.** Bundles carry `engine`, `jobId`, `mode` and
   `credits` per job, and successful live submissions write their `jobId` back so
   the next run downloads instead of paying again. A recorded job that is not
@@ -194,7 +201,10 @@ non-zero if a selected local job has no raw archive or cannot be rebuilt.
    for inline JSON results.
 4. **Bake** — run the job's baker over the raw outputs and inline result to
    produce a portable record.
-5. **Emit** — hand all records to the configured emitters.
+5. **Emit** — hand all records to the configured emitters. Every artifact is
+   written atomically and aggregates are validated as exact JSON first. With
+   `merge: true` an aggregate emitter overlays this run's records on its
+   previous artifact, so a partial run never drops published data.
 
 A failed job is reported and the remaining jobs still run; the command exits 1
 at the end. Pass `--strict` (or `strict: true` to `runConfig`) to stop at the
@@ -226,7 +236,8 @@ The local set is `ir`/`ir-descriptor`, `echo-map`, `audio-clip` and
 beside its descriptor), so a file-derived clip is rebuildable exactly like an
 `ir` or `echo-map`. `repair` emits only the rebuilt records; scope it with
 `--only`, or a config of those jobs, if an aggregate emitter should not be
-rewritten with just the repaired records.
+rewritten with just the repaired records — or set `merge: true` on those
+emitters and a scoped repair keeps every record outside the scope too.
 
 ## Configuration
 
@@ -455,7 +466,7 @@ An emitter is `emit(records, ctx) => filesWritten`:
  *   generator: string,
  *   log: (message: string) => void,
  * }} ctx
- * @returns {string[]} paths written
+ * @returns {string[] | Promise<string[]>} paths written
  */
 ```
 
@@ -463,11 +474,11 @@ Built-ins:
 
 | `type` | Writes | Options |
 | --- | --- | --- |
-| `files` | one file per record, decoded: `<bucket>/<key>.png` for image and sprite-sheet records, `.r.png`/`.t.png` for LUTs, numbered frames for effects, `<bucket>/<key>.wav` for audio clips, `.json` for structured records, IR audio copied next to its descriptor, plus `index.json` | `dir`, `index`, `indexFile` |
-| `json` | one aggregate bundle: `{ version, generator, provenance, <buckets…> }` | `file`, `pretty`, `provenance`, `shape` (`buckets` \| `records`) |
-| `esm` | a generated module: `export const <name> = …; export default <name>;` | `file`, `export`, `defaultExport`, `header`, `provenance`, `shape` |
+| `files` | one file per record, decoded: `<bucket>/<key>.png` for image and sprite-sheet records, `.r.png`/`.t.png` for LUTs, numbered frames for effects, `<bucket>/<key>.wav` for audio clips, `.json` for structured records, IR audio copied next to its descriptor, plus `index.json` | `dir`, `index`, `indexFile`, `merge` |
+| `json` | one aggregate bundle: `{ version, generator, provenance, <buckets…> }` | `file`, `pretty`, `provenance`, `shape` (`buckets` \| `records`), `merge` |
+| `esm` | a generated module: `export const <name> = …; export default <name>;` | `file`, `export`, `defaultExport`, `header`, `provenance`, `shape`, `merge` |
 | `atlas` | `<bucket>/<key>.png` for each sprite-sheet record plus a `<bucket>/<key>.json` sidecar with the animation metadata; deterministic and idempotent | `dir`, `sidecar`, `pretty` |
-| `audio-pack` | a self-contained audio bundle: `<bucket>/<key>.wav` for `audio-clip`/`audio-stitch` (decoded or copied) and `ir`, `<bucket>/<key>.json` sidecars for `echo-map`/`ir`, and `manifest.json` (`{ version, generator, provenance, clips, spaces, irs }`) where each clip carries `url`, `seconds`, `sampleRate`, `channels`, `loopStart`, `loopEnd` and `gain` | `dir`, `manifest` (filename or `false`), `pretty`, `sidecar` |
+| `audio-pack` | a self-contained audio bundle: `<bucket>/<key>.wav` for `audio-clip`/`audio-stitch` (decoded or copied) and `ir`, `<bucket>/<key>.json` sidecars for `echo-map`/`ir`, and `manifest.json` (`{ version, generator, provenance, clips, spaces, irs }`) where each clip carries `url`, `seconds`, `sampleRate`, `channels`, `loopStart`, `loopEnd` and `gain` | `dir`, `manifest` (filename or `false`), `pretty`, `sidecar`, `merge` |
 
 ```jsonc
 {
@@ -486,6 +497,50 @@ or several at once:
   ]
 }
 ```
+
+### Merge-safe publication
+
+A run is not always a full run: `--only` selects a subset, `enabled: false`
+skips jobs, and a failed job produces no record. Rewriting an aggregate
+artifact from that subset would silently drop what a previous run published.
+Set `merge: true` on an aggregate emitter to load its previous artifact and
+overlay this run's records instead:
+
+```jsonc
+{
+  "emitters": [
+    { "type": "esm", "file": "baked.mjs", "export": "BAKED", "merge": true },
+    { "type": "json", "file": "bundle.json", "merge": true }
+  ]
+}
+```
+
+```bash
+node bin/mothbake.mjs run --config examples/publish.json --out out/publish
+node bin/mothbake.mjs run --config examples/publish.json --out out/publish --only nebula-sky
+# bundle.json and baked.mjs still carry the rock tile from the first run
+```
+
+Merge is per emitter and **opt-in**: without it an emitter replaces its
+artifact exactly as before. It is an emitter option rather than a run-wide
+`--merge` flag because only the emitter knows whether merging its output is
+meaningful — a custom emitter that never asked for merge must not silently
+change. Keys this run did not write keep their previous values, and frame
+records merge by index, so a partial effect run cannot shift a later frame onto
+index 0 (a frame index beyond the previous tail stays an explicit `null`
+placeholder). `files` merges its `index.json` by file path (`file` is the
+unique key) and unions provenance; `audio-pack` merges `clips`/`spaces`/`irs`
+and provenance in its manifest. To read its previous data the `esm` emitter
+imports its own previous module (cache-busted) and takes the configured export
+or the default — it is code this pipeline generated on an earlier run.
+
+Every artifact is written through a same-directory temp file and renamed, and
+each aggregate is checked as exact JSON before the write: NaN, Infinity,
+`undefined` keys, array holes, cycles and non-plain objects are rejected with
+the path of the offending value instead of being silently mangled. If the check
+fails, the previous artifact is left byte-identical. `merge: true` against a
+missing artifact behaves exactly like a fresh write; against a corrupt one it
+fails loudly rather than overwrite it.
 
 ### Animated images and audio
 
@@ -659,6 +714,9 @@ node bin/mothbake.mjs sources --config examples/manifest.json
 The recorded fixtures live in [`test/fixtures/`](test/fixtures) (small, trimmed
 engine results kept for tests and examples). [`examples/sources.mjs`](examples/sources.mjs)
 shows the source-art generator directly.
+[`examples/publish.json`](examples/publish.json) is a two-job config whose
+aggregate emitters set `merge: true`; re-running it with `--only` shows a
+partial run keeping the previously published records.
 
 ## Security
 

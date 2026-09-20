@@ -11,6 +11,7 @@ import { createApi, resolveBaseUrl } from './api.mjs';
 import { resolveBakers } from './bakers/index.mjs';
 import { summarizeRecords } from './bundle.mjs';
 import { runEmitters } from './emitters/index.mjs';
+import { writeFileAtomic } from './publish.mjs';
 import { generateValues, generators as builtinGenerators } from './values.mjs';
 
 const CONTENT_TYPE_EXTENSIONS = {
@@ -204,19 +205,19 @@ async function saveResponse({ response, api, outDir, rawName, log }) {
       const extension = extensionFor(null, response.sources?.get(slot) ?? slot);
       const relative = path.join('raw', rawName, `${sanitize(slot)}.${extension}`);
       const target = path.join(outDir, relative);
-      fs.writeFileSync(target, buffer);
+      writeFileAtomic(target, buffer);
       files.set(slot, buffer);
       saved.set(slot, { file: target, relative, contentType: null, assetId: null });
       log(`  fixture ${path.relative(outDir, target)} (${buffer.length} bytes)`);
     }
   } else {
     for (const output of response.outputs || []) {
-      const buffer = output.bufferOverride ?? (await api.downloadOutput(output.url));
+      const buffer = output.bufferOverride ?? (await api.downloadOutput(output.url, { contentType: output.content_type }));
       const slot = output.slot || `output-${files.size}`;
       const extension = extensionFor(output.content_type, output.url);
       const relative = path.join('raw', rawName, `${sanitize(slot)}.${extension}`);
       const target = path.join(outDir, relative);
-      fs.writeFileSync(target, buffer);
+      writeFileAtomic(target, buffer);
       files.set(slot, buffer);
       saved.set(slot, { file: target, relative, contentType: output.content_type ?? null, assetId: output.output_asset_id ?? null });
       log(`  saved ${path.relative(outDir, target)} (${buffer.length} bytes)`);
@@ -224,7 +225,7 @@ async function saveResponse({ response, api, outDir, rawName, log }) {
   }
   if (response.result !== undefined && response.result !== null) {
     const relative = path.join('raw', rawName, 'result.json');
-    fs.writeFileSync(path.join(outDir, relative), `${JSON.stringify(response.result, null, 2)}\n`);
+    writeFileAtomic(path.join(outDir, relative), `${JSON.stringify(response.result, null, 2)}\n`);
   }
   return { files, saved, rawDir };
 }
@@ -233,7 +234,7 @@ function writeBackJobIds({ config, configFile, writeBack, log }) {
   if (writeBack === false || !configFile || path.extname(configFile).toLowerCase() !== '.json') return false;
   const next = `${JSON.stringify(config, null, 2)}\n`;
   if (fs.readFileSync(configFile, 'utf8') === next) return false;
-  fs.writeFileSync(configFile, next);
+  writeFileAtomic(configFile, next);
   log(`recorded job ids in ${configFile}`);
   return true;
 }

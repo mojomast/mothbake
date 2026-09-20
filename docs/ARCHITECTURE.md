@@ -150,9 +150,10 @@ for consumers that prefer arrays or for per-record transforms.
 
 ### 6. Emit (`src/emitters/`)
 
-An emitter is `emit(records, ctx) => string[]`. `ctx` carries `outDir`, the
-resolved `options`, the whole `config`, `provenance`, `version`, `generator` and
-a `log`. The registry resolves config entries in three shapes:
+An emitter is `emit(records, ctx) => string[]` (or a promise of one). `ctx`
+carries `outDir`, the resolved `options`, the whole `config`, `provenance`,
+`version`, `generator` and a `log`. The registry resolves config entries in
+three shapes:
 
 - `"files"` — built-in by name
 - `{ "type": "esm", "file": "baked.mjs" }` — built-in with options
@@ -167,6 +168,30 @@ audio counterpart: it writes `audio-clip`/`audio-stitch`/`ir` audio and
 `echo-map`/`ir` sidecars under `<dir>/<bucket>/` plus a `manifest.json` that
 describes every clip (`url`, `seconds`, `sampleRate`, `channels`, `loopStart`,
 `loopEnd`, `gain`). Both are deterministic and idempotent.
+
+#### Publication (`src/publish.mjs`)
+
+Every emitter writes through `writeFileAtomic` (same-directory temp file plus
+rename), so a crash or a validation error cannot leave a half-written artifact:
+the previous file stays byte-identical. Aggregate emitters additionally
+validate before writing with `validateForPublish`: exact JSON throughout
+(`assertJsonSafe` rejects NaN/Infinity, dropped `undefined` keys, array holes,
+cycles and non-plain objects, naming the offending path) and provenance
+coverage for every job whose records the artifact carries.
+
+Aggregate emitters accept `merge: true`. They load their previous artifact
+(`readJsonArtifact` for JSON, `readModuleArtifact` for the `esm` module; a
+missing file is `null`, a corrupt one is an error so it is never silently
+replaced) and overlay this run's records with `mergeRecordsIntoBundle`,
+`mergeRecordLists`, `mergeBundles` or `mergeIndex`. Keys this run did not write
+keep their previous values, and frame records merge by index so a partial
+effect run cannot shift a later frame onto index 0. Merge is opt-in per
+emitter; a default run replaces its artifact exactly as before. That makes a
+scoped `repair` or an `--only` run additive instead of destructive.
+
+Downloaded outputs go through the same gates in `src/api.mjs`: `res.ok` is
+enforced, the served `content-type` must match the declared one (parameters and
+case ignored), and an empty body is an error rather than an empty artifact.
 
 ### 7. Repair (`src/repair.mjs`)
 
@@ -220,6 +245,10 @@ contain just the repaired records.
   surfaced, but custom extension options are not blocked.
 - **Failures are per job.** One bad job does not stop a run; the CLI exits 1 at
   the end and prints each failure.
+- **Publication is failure-safe.** Emitter writes are atomic and validated as
+  exact JSON before they land, and merge is opt-in per emitter. A partial run
+  or a validation error can leave a published artifact stale, but never
+  half-written or silently truncated.
 
 ## Upstream sync
 
@@ -247,6 +276,7 @@ src/image.mjs           pixel/grid helpers, ramps, base64
 src/decoders/{png,gif,zip,hdr,wav,midi}.mjs
 src/bakers/*.mjs        one file per baker + registry (+ shared audio helpers)
 src/emitters/*.mjs      files, json, esm, atlas, audio-pack + registry
+src/publish.mjs         atomic writes, exact-JSON validation, merge-safe publication
 ```
 
 ## Tests
@@ -267,6 +297,7 @@ Everything runs under `node --test` and makes no external network calls:
 | Submit → poll → download → bake → emit against a mock API; cached-job reuse and the failed/unknown-status guard | `test/mock-server.test.mjs` |
 | Offline repair from raw outputs (`repair`, `LOCAL_BAKE_TYPES`) | `test/repair.test.mjs` |
 | Emitters (files/json/esm, custom) | `test/emitters.test.mjs` |
+| Publication: atomic writes, exact-JSON validation, merge-safe emitters, download validation | `test/publish.test.mjs` |
 | ESM emitter byte-for-byte golden | `test/golden.test.mjs` + `test/golden/baked.golden.mjs` |
 | Runner helpers (selection, dry plans, write-back) | `test/runner.test.mjs` |
 

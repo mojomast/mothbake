@@ -62,6 +62,12 @@ export function resolveBaseUrl(options = {}) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Content-type without parameters, lowercased; '' for anything else. */
+export function normalizeContentType(value) {
+  if (typeof value !== 'string') return '';
+  return value.split(';')[0].trim().toLowerCase();
+}
+
 /**
  * Create a client bound to a base URL and (optional) key.
  *
@@ -182,10 +188,23 @@ export function createApi(options = {}) {
     return created.asset_id;
   }
 
-  async function downloadOutput(url) {
+  /**
+   * Download an output to a Buffer. `res.ok` is always enforced; pass the
+   * declared `contentType` from the job result to also enforce that the server
+   * served what it promised, and empty bodies are always rejected so a failed
+   * download cannot silently become an empty artifact.
+   */
+  async function downloadOutput(url, downloadOptions = {}) {
     const response = await fetchImpl(url);
     if (!response.ok) throw new Error(`download ${url} -> ${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
+    const declared = normalizeContentType(downloadOptions.contentType);
+    const actual = normalizeContentType(response.headers?.get?.('content-type'));
+    if (declared && actual !== declared) {
+      throw new Error(`download ${url}: content-type "${actual || '(none)'}" does not match the declared "${declared}"`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (!buffer.length) throw new Error(`download ${url}: empty body`);
+    return buffer;
   }
 
   return { baseUrl: base, listEngines, getEngine, submitJob, jobStatus, jobResult, waitForJob, uploadAsset, downloadOutput, request };

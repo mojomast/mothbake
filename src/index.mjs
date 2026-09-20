@@ -9,6 +9,7 @@ export { decodePng, encodePng, crc32, unzip, zip, decodeHdr, wavInfo, decodeWav,
 export { bakers, bakerTypes, bakerBuckets, resolveBakers } from './bakers/index.mjs';
 export { emitters, emitterTypes, resolveEmitters, runEmitters } from './emitters/index.mjs';
 export { bundleRecords, summarizeRecords } from './bundle.mjs';
+export { assertJsonSafe, isPlainObject, mergeBundles, mergeIndex, mergeRecordLists, mergeRecordsIntoBundle, readJsonArtifact, readModuleArtifact, validateForPublish, writeFileAtomic } from './publish.mjs';
 export { ConfigError, DEFAULT_CONFIG_FILES, assertValidConfig, findConfigFile, formatIssue, loadConfig, validateConfig } from './config.mjs';
 export { ApiError, DEFAULT_BASE_URL, createApi, guessContentType, readKey, resolveBaseUrl } from './api.mjs';
 export { jobsRequiringApi, normalizeOnly, runConfig, selectJobs } from './runner.mjs';

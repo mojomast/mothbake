@@ -107,6 +107,9 @@ pipeline; "here" is `mothbake`.
 | Emitters (files / JSON / ESM) | partial | yes | Upstream writes one hard-coded module; here emitters are a registry. |
 | Emitter `atlas` (sprite-sheet PNG + JSON sidecar) | partial | yes | Deterministic and idempotent; composes with the other emitters. |
 | Emitter `audio-pack` (audio bundle + manifest) | partial | yes | Writes clips/IRs/spaces plus a deterministic `manifest.json`; composes with the other emitters. |
+| Atomic + exact-JSON validated publication | yes | yes | Emitters write through a same-directory temp file + rename. Aggregates are validated before the write: no NaN/Infinity, `undefined` keys, array holes, cycles or non-plain objects, and provenance for every job whose records the artifact carries. A rejected write leaves the previous artifact byte-identical. |
+| Merge-safe publication (opt-in `merge: true`) | yes | yes | Here merge is an emitter option, not a default: `json`, `esm`, `files` (its `index.json`) and `audio-pack` (its manifest) load their previous artifact and overlay this run's records. Keys a partial run did not write keep their previous values; frame records merge by index. Corrupt previous artifacts fail loudly instead of being replaced. |
+| Download validation (status, declared content type, empty body) | yes | yes | `res.ok` plus declared-vs-actual content-type (parameters/case ignored) and empty-body rejection. Raw archives are written atomically. |
 | Output-asset-id capture + `inputFrom` chaining | yes | yes | Captures `output_asset_id`, persists `job.assetIds`, and resolves a later job's input from the run, the config, or a re-upload. |
 | API client (engines, jobs, assets, polling) | yes | yes | Injectable `fetch`/`sleep` for offline tests. |
 
@@ -135,6 +138,32 @@ them and to the rights of any source material supplied.
 
 ## Sync log
 
+- **2026-09-20** — Merge-safe, atomic and validated publication. Added
+  `src/publish.mjs` (`writeFileAtomic`, `assertJsonSafe`, `readJsonArtifact`,
+  `readModuleArtifact`, `mergeBundles`, `mergeRecordsIntoBundle`,
+  `mergeRecordLists`, `mergeIndex`, `validateForPublish`), the generic form of
+  the upstream pipeline's publication hardening. Every emitter now writes
+  through a same-directory temp file and rename, and aggregate emitters
+  (`json`, `esm`, `files`, `audio-pack`) validate their artifact before writing:
+  exact JSON throughout, plus provenance coverage for every job whose records
+  the artifact carries; a rejected write leaves the previous artifact
+  byte-identical. The aggregate emitters accept an opt-in `merge: true` that
+  loads their previous artifact (JSON, or the ESM module's configured export)
+  and overlays this run's records key by key, with frame records merging by
+  index — so a partial run (`--only`, disabled jobs, failures) or a scoped
+  `repair` never drops previously published data. Merge is deliberately an
+  emitter option rather than a run-wide flag: only the emitter knows whether
+  merging its output is meaningful, so a custom emitter that never opted in is
+  unchanged. `src/api.mjs` now also enforces the declared-vs-actual content
+  type and rejects empty download bodies, and raw archives plus JSON write-back
+  are written atomically. Added `test/publish.test.mjs` (atomic-write
+  replacement and temp cleanup, JSON-safety rejection table, artifact loading,
+  merge helpers and every merge-capable emitter, corrupt-previous refusal,
+  download validation against a stub `fetch`, and an offline CLI run of
+  `examples/publish.json` proving a partial run preserves prior records and a
+  dry run writes nothing) and extended the CLI `--only` test with a mixed
+  valid/unknown comma-separated list. Added `examples/publish.json` and updated
+  the README, `docs/ARCHITECTURE.md` and this matrix.
 - **2026-09-18** — Offline repair and cached-job safety. Added `src/repair.mjs`
   (`LOCAL_BAKE_TYPES`, `isLocalBake`, `readRawResults`, `rebuildLocalBakes`,
   `repairConfig`) and the `mothbake repair` command. It rebuilds the purely

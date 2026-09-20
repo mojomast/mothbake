@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "generator": "mothbake",
+  "comment": "Merge-safe publication example. Both aggregate emitters opt in with `merge: true`, so a partial run (--only, disabled jobs, or a failure) keeps everything a previous run published instead of rewriting the bundle from just this run's records. Every job is recorded, so it runs offline with no key. Try: `node bin/mothbake.mjs run --config examples/publish.json --out out/publish` and then re-run with `--only nebula-sky`; bundle.json and baked.mjs still carry the rock tile.",
+  "emitters": [
+    { "type": "json", "file": "bundle.json", "merge": true },
+    { "type": "esm", "file": "baked.mjs", "export": "BAKED", "merge": true }
+  ],
+  "jobs": [
+    {
+      "id": "rock-tile",
+      "engine": "blur-v1",
+      "credits": 1,
+      "raw": "rock-tile",
+      "bake": { "type": "texture-tile", "name": "rock", "size": 32 },
+      "recorded": { "outputs": { "result": "../test/fixtures/tile.png" } }
+    },
+    {
+      "id": "nebula-sky",
+      "engine": "blur-v1",
+      "credits": 1,
+      "raw": "nebula-sky",
+      "bake": { "type": "sky", "name": "nebula", "width": 64, "height": 32 },
+      "recorded": { "outputs": { "result": "../test/fixtures/sky.png" } }
+    }
+  ]
+}

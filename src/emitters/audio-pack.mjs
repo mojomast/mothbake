@@ -12,11 +12,14 @@
 // in order, base64 is decoded verbatim) and idempotent.
 //
 // Options: `dir`, `manifest` (filename, default `manifest.json`, or `false`),
-// `pretty` (default 2), `sidecar` (default true; write echo-map/ir JSON).
+// `pretty` (default 2), `sidecar` (default true; write echo-map/ir JSON),
+// `merge` (default false; merge this run's entries over the previous manifest).
+// Every file is written atomically and the manifest is validated as exact JSON.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fromBase64 } from '../image.mjs';
+import { assertJsonSafe, mergeBundles, readJsonArtifact, validateForPublish, writeFileAtomic } from '../publish.mjs';
 
 export const name = 'audio-pack';
 
@@ -24,8 +27,7 @@ const posix = (value) => value.split(path.sep).join('/');
 
 function write(root, relative, data, written) {
   const target = path.join(root, relative);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, data);
+  writeFileAtomic(target, data);
   written.push(target);
   return target;
 }
@@ -100,6 +102,7 @@ export function emit(records, ctx) {
       };
       if (options.sidecar !== false) {
         const sidecar = { ...value, file: packRelative ?? value.file ?? null };
+        assertJsonSafe(sidecar, `audio-pack emitter (${record.bucket}.${record.key})`);
         write(root, path.join(record.bucket, `${record.key}.json`), `${JSON.stringify(sidecar, null, pretty)}\n`, written);
       }
       continue;
@@ -107,6 +110,7 @@ export function emit(records, ctx) {
     if (record.type === 'echo-map') {
       spaces[`${record.bucket}/${record.key}`] = value;
       if (options.sidecar !== false) {
+        assertJsonSafe(value, `audio-pack emitter (${record.bucket}.${record.key})`);
         write(root, path.join(record.bucket, `${record.key}.json`), `${JSON.stringify(value, null, pretty)}\n`, written);
       }
       continue;
@@ -114,8 +118,14 @@ export function emit(records, ctx) {
   }
 
   if (options.manifest !== false) {
-    const manifest = { version, generator, provenance, clips, spaces, irs };
-    write(root, options.manifest ?? 'manifest.json', `${JSON.stringify(manifest, null, pretty)}\n`, written);
+    const manifestName = options.manifest ?? 'manifest.json';
+    const target = path.join(root, manifestName);
+    const label = `audio-pack emitter (${manifestName})`;
+    const fresh = { version, generator, provenance, clips, spaces, irs };
+    const previous = options.merge ? readJsonArtifact(target, label) : null;
+    const manifest = options.merge ? mergeBundles(previous, fresh) : fresh;
+    validateForPublish(manifest, { expectedProvenance: Object.keys(provenance), label });
+    write(root, manifestName, `${JSON.stringify(manifest, null, pretty)}\n`, written);
   }
   return written;
 }

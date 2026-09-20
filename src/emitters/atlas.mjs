@@ -7,12 +7,13 @@
 // Options: { dir?, sidecar? } where `dir` prefixes a subdirectory and
 // `sidecar: false` skips the JSON. Output is deterministic (records are
 // processed in order, PNG encoding is fixed, sidecars use a stable key order)
-// and idempotent (a re-run rewrites identical bytes).
+// and idempotent (a re-run rewrites identical bytes). Every file is written
+// atomically, and a sidecar is validated as exact JSON before it lands.
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { encodePng } from '../decoders/png.mjs';
 import { fromBase64 } from '../image.mjs';
+import { assertJsonSafe, writeFileAtomic } from '../publish.mjs';
 
 export const name = 'atlas';
 
@@ -20,8 +21,7 @@ const posix = (value) => value.split(path.sep).join('/');
 
 function write(root, relative, data, written) {
   const target = path.join(root, relative);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, data);
+  writeFileAtomic(target, data);
   written.push(target);
   return target;
 }
@@ -64,6 +64,7 @@ export function emit(records, ctx) {
     if (options.sidecar === false) continue;
     const jsonRelative = path.join(record.bucket, `${record.key}.json`);
     const sidecar = sidecarFor(record, posix(path.relative(outDir, target)));
+    assertJsonSafe(sidecar, `atlas emitter (${record.bucket}.${record.key})`);
     write(root, jsonRelative, `${JSON.stringify(sidecar, null, options.pretty ?? 2)}\n`, written);
   }
   return written;
