@@ -248,6 +248,7 @@ function writeBackJobIds({ config, configFile, writeBack, log }) {
  *   only?: string|string[]|null, force?: boolean, dry?: boolean,
  *   strict?: boolean, writeBack?: boolean, log?: (message: string) => void,
  *   fetchImpl?: typeof fetch, sleepImpl?: (ms: number) => Promise<void>,
+ *   nowImpl?: () => number, randomImpl?: () => number,
  * }} options
  */
 export async function runConfig(options = {}) {
@@ -279,7 +280,7 @@ export async function runConfig(options = {}) {
   const baseUrl = resolveBaseUrl({ base: options.base, configBaseUrl: config.baseUrl, env });
   const api = dry
     ? null
-    : createApi({ baseUrl, key: options.key ?? null, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl, log });
+    : createApi({ baseUrl, key: options.key ?? null, env, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl, nowImpl: options.nowImpl, randomImpl: options.randomImpl, log });
 
   for (const job of jobs) {
     if (job.enabled === false) {

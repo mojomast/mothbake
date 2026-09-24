@@ -113,7 +113,7 @@ pipeline; "here" is `mothbake`.
 | Merge-safe publication (opt-in `merge: true`) | yes | yes | Here merge is an emitter option, not a default: `json`, `esm`, `files` (its `index.json`) and `audio-pack` (its manifest) load their previous artifact and overlay this run's records. Keys a partial run did not write keep their previous values; frame records merge by index. Corrupt previous artifacts fail loudly instead of being replaced. |
 | Download validation (status, declared content type, empty body) | yes | yes | `res.ok` plus declared-vs-actual content-type (parameters/case ignored) and empty-body rejection. Raw archives are written atomically. |
 | Output-asset-id capture + `inputFrom` chaining | yes | yes | Captures `output_asset_id`, persists `job.assetIds`, and resolves a later job's input from the run, the config, or a re-upload. |
-| API client (engines, jobs, assets, polling) | yes | yes | Injectable `fetch`/`sleep` for offline tests. |
+| API client (engines, jobs, assets, polling) | yes | yes | Injectable `fetch`/`sleep` for offline tests, plus `nowImpl`/`randomImpl` for virtual-time tests. One paced request gate, credit-safe retries (a submit retries only on 429) and adaptive polling. |
 
 ## Deliberately not ported
 
@@ -139,6 +139,28 @@ baked assets remain subject to the terms of whichever upstream service produced
 them and to the rights of any source material supplied.
 
 ## Sync log
+
+- **2026-09-24** — Rate-limit-safe API usage. Ported the upstream
+  `scripts/moth-bake.mjs` request queue: every API call now goes through one
+  concurrency-1 gate spaced by `MOTH_MIN_INTERVAL_MS` (default 300 ms), and
+  failures retry within a bounded budget (`MOTH_MAX_RETRIES` default 5). A `429`
+  honours `Retry-After` (seconds or an HTTP date, capped at two minutes);
+  otherwise the wait is exponential with jitter (`MOTH_RETRY_BASE_MS` default
+  1000, `MOTH_RETRY_CAP_MS` default 30000), each wait logged as
+  `rate limited, retrying in Ns`. GETs and non-submit POSTs retry `429`,
+  transient `5xx` and transport failures; a job submit retries only `429` and
+  otherwise fails closed with a message saying the job may or may not have been
+  created, so an automatic retry can never pay twice. Job polling is adaptive:
+  base `MOTH_POLL_INTERVAL_MS` (default 1500 ms), growing 1.5x while the status
+  marker is unchanged up to `MOTH_POLL_MAX_INTERVAL_MS` (default 5000 ms), reset
+  on any transition; the 15-minute timeout is unchanged. Added
+  `test/rate-limit.test.mjs` (13 tests: virtual-time pacing and env override,
+  `429` with and without `Retry-After` and with an HTTP date, a capped and
+  bounded budget, GET retry vs submit fail-closed, adaptive polling with reset,
+  ceiling and timeout, and an end-to-end rate-limited run that submits exactly
+  once). Exported the new defaults from the package root and extended
+  `runConfig` with the `nowImpl`/`randomImpl` test hooks. Updated the README
+  ("Rate limits and pacing"), `docs/ARCHITECTURE.md` and this matrix.
 
 - **2026-09-24** — Height variety knobs and the `dust`/`flow` fields. Ported the
   upstream `heightGrid(size, seed, kind, spec)` variety knobs (`freq`, `octaves`,

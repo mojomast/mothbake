@@ -274,6 +274,35 @@ job's persisted `assetIds` (written back to JSON configs), then a re-upload of
 that job's archived raw output. Captured ids also appear in bundle provenance
 under `<job>.outputs`.
 
+## Rate limits and pacing
+
+Every API request from one run goes through a single queue (concurrency 1) with
+a minimum spacing, so a batch of jobs cannot burst into a rate limit:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MOTH_MIN_INTERVAL_MS` | `300` | Minimum spacing between API request starts. |
+| `MOTH_MAX_RETRIES` | `5` | Retries per request after `429`/transient failures. |
+| `MOTH_RETRY_BASE_MS` | `1000` | First backoff delay when there is no `Retry-After`. |
+| `MOTH_RETRY_CAP_MS` | `30000` | Backoff ceiling. |
+| `MOTH_POLL_INTERVAL_MS` | `1500` | First poll interval for a submitted job. |
+| `MOTH_POLL_MAX_INTERVAL_MS` | `5000` | Poll ceiling while a job makes no progress. |
+
+A `429` (or a `503` with `Retry-After`) waits as the server asks — seconds or an
+HTTP date, capped at two minutes — otherwise the wait is exponential with
+jitter, capped at `MOTH_RETRY_CAP_MS`. Every wait is logged (`rate limited,
+retrying in 2s`). GETs and non-submit POSTs (asset operations) retry `429`,
+transient `5xx` and network failures; a job **submit** is retried only on `429`,
+because anything else may already have created a paid job. If a submit fails
+without a confirmed response, the run stops with a message saying the job may or
+may not have been created — check the job list and credit history before
+rerunning.
+
+Job polling is adaptive: it starts at `MOTH_POLL_INTERVAL_MS`, grows the wait by
+1.5x while the status/progress marker does not change (up to
+`MOTH_POLL_MAX_INTERVAL_MS`), and resets to the base interval on every
+transition. The overall poll timeout is unchanged (15 minutes).
+
 ## CLI
 
 ```
@@ -309,6 +338,14 @@ Options:
 | --- | --- |
 | `MOTH_API_KEY` | Bearer token. Required for `catalog`, and for `run` when any selected job is not recorded. Never written to disk. |
 | `MOTH_API_BASE` | API base URL. Default `https://api.mothquantum.com`. Overridden by `--base` and overrides `baseUrl` from the config. |
+| `MOTH_MIN_INTERVAL_MS` | Minimum spacing between API request starts. Default `300`. |
+| `MOTH_MAX_RETRIES` | Retries per request after `429`/transient failures. Default `5`. |
+| `MOTH_RETRY_BASE_MS` | First backoff delay when there is no `Retry-After`. Default `1000`. |
+| `MOTH_RETRY_CAP_MS` | Backoff ceiling. Default `30000`. |
+| `MOTH_POLL_INTERVAL_MS` | First poll interval for a submitted job. Default `1500`. |
+| `MOTH_POLL_MAX_INTERVAL_MS` | Poll ceiling while a job makes no progress. Default `5000`. |
+
+See [Rate limits and pacing](#rate-limits-and-pacing) for the retry rules.
 
 ### What a run does
 

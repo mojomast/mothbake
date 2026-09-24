@@ -67,6 +67,20 @@ The client is injectable (`fetchImpl`, `sleepImpl`) and is created from
 `baseUrl` + key for the duration of a run. `MOTH_API_KEY` is required only when
 a selected job may hit the API; `--dry` and recorded-only runs do not need it.
 
+Requests are paced and retried. One client owns a single concurrency-1 gate with
+a minimum spacing (`MOTH_MIN_INTERVAL_MS`, default 300 ms), so a run's requests
+start one at a time and never faster than the interval. A `429` honours
+`Retry-After` (seconds or an HTTP date, capped at two minutes) or backs off
+exponentially with jitter (`MOTH_RETRY_BASE_MS` default 1000,
+`MOTH_RETRY_CAP_MS` default 30000, `MOTH_MAX_RETRIES` default 5), logging each
+wait as `rate limited, retrying in Ns`. GETs and non-submit POSTs retry `429`,
+transient `5xx` and network failures; a job submit retries only `429` — after a
+network error or `5xx` it fails closed with a "may or may not have been created"
+message, because a retry could pay for a second job. Polling is adaptive:
+`MOTH_POLL_INTERVAL_MS` (default 1500 ms), growing 1.5x while the status marker
+is unchanged up to `MOTH_POLL_MAX_INTERVAL_MS` (default 5000 ms), reset on any
+transition; the 15-minute timeout is unchanged.
+
 Raw outputs are archived under `<out>/raw/<raw>/` as `<slot>.<ext>` (extension
 from `content_type`), and an inline `result` is written as `result.json`. The
 `raw` name and the `saved` map are passed to bakers, which is how the `ir` baker
@@ -254,6 +268,9 @@ contain just the repaired records.
   exact JSON before they land, and merge is opt-in per emitter. A partial run
   or a validation error can leave a published artifact stale, but never
   half-written or silently truncated.
+- **Rate limits are handled, not ignored.** One paced request gate per run;
+  GETs retry transient failures freely, a paid submit retries only when a `429`
+  proves nothing was created, and polling backs off while a job is stalled.
 
 ## Upstream sync
 
@@ -272,7 +289,7 @@ src/cli.mjs             argument parsing, commands, exit codes
 src/config.mjs          load + validate
 src/runner.mjs          resolve/archive/bake/emit orchestration
 src/repair.mjs          offline rebuild of local records from raw outputs
-src/api.mjs             HTTP client (engines, jobs, assets)
+src/api.mjs             HTTP client (engines, jobs, assets), pacing, retries, polling
 src/bundle.mjs          records -> aggregate bundle
 src/values.mjs          generateValues grids
 src/noise.mjs           deterministic value noise
@@ -303,6 +320,7 @@ Everything runs under `node --test` and makes no external network calls:
 | Offline repair from raw outputs (`repair`, `LOCAL_BAKE_TYPES`) | `test/repair.test.mjs` |
 | Emitters (files/json/esm, custom) | `test/emitters.test.mjs` |
 | Publication: atomic writes, exact-JSON validation, merge-safe emitters, download validation | `test/publish.test.mjs` |
+| Pacing, retries, credit-safe submits and adaptive polling (virtual time and a rate-limited mock server) | `test/rate-limit.test.mjs` |
 | ESM emitter byte-for-byte golden | `test/golden.test.mjs` + `test/golden/baked.golden.mjs` |
 | Runner helpers (selection, dry plans, write-back) | `test/runner.test.mjs` |
 

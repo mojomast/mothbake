@@ -39,8 +39,14 @@ Options:
   -v, --version        Show the version
 
 Environment:
-  MOTH_API_KEY         Required for catalog, and for run when any job is not recorded
-  MOTH_API_BASE        Alternative to --base (default: https://api.mothquantum.com)
+  MOTH_API_KEY             Required for catalog, and for run when any job is not recorded
+  MOTH_API_BASE            Alternative to --base (default: https://api.mothquantum.com)
+  MOTH_MIN_INTERVAL_MS     Minimum spacing between API request starts (default 300)
+  MOTH_MAX_RETRIES         Retries per request after 429/transient failures (default 5)
+  MOTH_RETRY_BASE_MS       First backoff delay when Retry-After is absent (default 1000)
+  MOTH_RETRY_CAP_MS        Backoff ceiling (default 30000)
+  MOTH_POLL_INTERVAL_MS    First job-status poll interval (default 1500)
+  MOTH_POLL_MAX_INTERVAL_MS  Poll ceiling while a job makes no progress (default 5000)
 
 Bakers: ${bakerTypes.join(', ')}
 Emitters: ${emitterTypes.join(', ')}

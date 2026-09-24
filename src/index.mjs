@@ -11,7 +11,7 @@ export { emitters, emitterTypes, resolveEmitters, runEmitters } from './emitters
 export { bundleRecords, summarizeRecords } from './bundle.mjs';
 export { assertJsonSafe, isPlainObject, mergeBundles, mergeIndex, mergeRecordLists, mergeRecordsIntoBundle, readJsonArtifact, readModuleArtifact, validateForPublish, writeFileAtomic } from './publish.mjs';
 export { ConfigError, DEFAULT_CONFIG_FILES, assertValidConfig, findConfigFile, formatIssue, loadConfig, validateConfig } from './config.mjs';
-export { ApiError, DEFAULT_BASE_URL, createApi, guessContentType, readKey, resolveBaseUrl } from './api.mjs';
+export { ApiError, DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_MIN_INTERVAL_MS, DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_MAX_INTERVAL_MS, DEFAULT_POLL_TIMEOUT_MS, DEFAULT_RETRY_AFTER_CAP_MS, DEFAULT_RETRY_BASE_MS, DEFAULT_RETRY_CAP_MS, createApi, guessContentType, isTransientNetworkError, readKey, resolveBaseUrl } from './api.mjs';
 export { jobsRequiringApi, normalizeOnly, runConfig, selectJobs } from './runner.mjs';
 export { LOCAL_BAKE_TYPES, isLocalBake, readRawResults, rebuildLocalBakes, repairConfig } from './repair.mjs';
 export { generateValues, generatorTypes, generators, heightGrid, dustGrid, flowGrid, portalGrid, radialGrid, sparkGrid, bloomGrid, vortexGrid, contractGrid, riseGrid, shieldGrid, snowGrid } from './values.mjs';
