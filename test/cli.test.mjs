@@ -36,7 +36,7 @@ test('unknown commands and options exit 1 with a hint', async () => {
 test('validate accepts the example manifest', async () => {
   const { code, stdout, stderr } = await runCli(['validate', '--config', EXAMPLES]);
   assert.equal(code, 0);
-  assert.match(stdout, /OK — 22 job\(s\)/);
+  assert.match(stdout, /OK — 26 job\(s\)/);
   assert.equal(stderr, '');
 });
 
@@ -60,7 +60,7 @@ test('run --dry plans the recorded jobs without a key or writes', async (t) => {
   const outDir = path.join(root, 'not-created');
   const { code, stdout, stderr } = await runCli(['run', '--config', EXAMPLES, '--out', outDir, '--dry']);
   assert.equal(code, 0);
-  assert.match(stdout, /dry run — 22 job\(s\): \{"recorded":22\}/);
+  assert.match(stdout, /dry run — 26 job\(s\): \{"recorded":26\}/);
   assert.match(stderr, /rock-tile \(blur-v1\) — would read the recorded fixture, bake texture-tile/);
   assert.ok(!fs.existsSync(outDir), '--dry must not create the output directory');
 });
@@ -128,9 +128,10 @@ test('run completes an offline recorded bake through the CLI', async (t) => {
   const before = fs.readFileSync(EXAMPLES, 'utf8');
   const { code, stdout, stderr } = await runCli(['run', '--config', EXAMPLES, '--out', outDir]);
   assert.equal(code, 0, stderr);
-  assert.match(stdout, /baked 22 record\(s\) from 22 job\(s\)/);
+  assert.match(stdout, /baked 26 record\(s\) from 26 job\(s\)/);
   assert.match(stdout, /"textures":1/);
-  assert.match(stdout, /"effects":9/);
+  assert.match(stdout, /"normals":3/);
+  assert.match(stdout, /"effects":11/);
   assert.ok(fs.existsSync(path.join(outDir, 'baked.mjs')));
   assert.ok(fs.existsSync(path.join(outDir, 'textures', 'rock.png')));
   assert.ok(fs.existsSync(path.join(outDir, 'raw', 'rock-tile', 'result.png')));
@@ -142,7 +143,7 @@ test('run completes an offline recorded bake through the CLI', async (t) => {
   assert.ok(fs.existsSync(path.join(outDir, 'sprites', 'walk.png')), 'sprite-sheet atlas is written');
   assert.ok(fs.existsSync(path.join(outDir, 'sprites', 'walk.json')), 'atlas emitter writes the sidecar');
   assert.ok(fs.existsSync(path.join(outDir, 'audio', 'footstep.wav')), 'audio-clip WAV is written');
-  for (const effect of ['effect-explosion', 'effect-teleport', 'effect-capture-ring', 'effect-heal', 'effect-shield', 'effect-weather-snow']) {
+  for (const effect of ['effect-explosion', 'effect-teleport', 'effect-capture-ring', 'effect-heal', 'effect-shield', 'effect-weather-snow', 'effect-dust', 'effect-flow']) {
     assert.ok(fs.existsSync(path.join(outDir, 'effects', `${effect}.000.png`)), `${effect} frame is written`);
   }
   assert.ok(fs.existsSync(path.join(outDir, 'irs', 'open-air.wav')), 'IR audio is copied next to its descriptor');

@@ -145,11 +145,13 @@ Every artifact is written under `mothbake-out/` (change it with `--out`):
 decoded files per bucket, `raw/` archives of the engine results, `index.json`,
 and the `baked.mjs` module the config asked for.
 
-A complete offline example — texture, sky, normal map, nine effect frames
-(radial, portal, spark, bloom, vortex, contract, rise, shield and snow
-generators), LUT, motif, two impulse responses (including an open-air room), an
-animated GIF sprite sheet, embedded and file-mode audio clips, a stitched clip,
-an echo map, generated audio seeds/chunks and an `audio-pack` bundle — lives in
+A complete offline example — texture, sky, three normal maps (default noise,
+ridged strata and an angled/anisotropic brushed field), eleven effect frames
+(radial, portal, spark, bloom, vortex, contract, rise, shield, snow, dust and
+flow generators), LUT, motif, two impulse responses (including an open-air
+room), an animated GIF sprite sheet, embedded and file-mode audio clips, a
+stitched clip, an echo map, generated audio seeds/chunks and an `audio-pack`
+bundle — lives in
 [`examples/manifest.json`](examples/manifest.json):
 
 ```bash
@@ -340,7 +342,7 @@ in the config. Built-ins:
 
 | `generateValues.type` | Produces | Options |
 | --- | --- | --- |
-| `height` | seamlessly tiling height field | `size`, `seed`, `kind` (`noise` \| `ridge` \| `cells`) |
+| `height` | seamlessly tiling height field | `size`, `seed`, `kind` (`noise` \| `ridge` \| `cells`), `freq`, `octaves`, `angle`, `anisotropy` |
 | `radial` | expanding shock ring | `size`, `seed`, `frame` |
 | `portal` | ring with spokes and a hot core | `size`, `seed`, `frame` |
 | `spark` | bright core with needle rays | `size`, `seed`, `frame` |
@@ -350,11 +352,18 @@ in the config. Built-ins:
 | `rise` | motes rising through a soft heal column | `size`, `seed`, `frame` |
 | `shield` | expanding hexagonal bubble shell with seams | `size`, `seed`, `frame` |
 | `snow` | drifting flakes, seamless across frames | `size`, `seed`, `frame` |
+| `dust` | soft drifting dust/damp patches | `size` (64), `seed` (149) |
+| `flow` | directional wear/flow streaks along +x | `size` (64), `seed` (173) |
 
 Every generator is pure and deterministic, returns a square `size`×`size` grid
 of values in `[0, 1]`, and for the animated families accepts a `frame` index.
-`height` also accepts `kind` (`noise` | `ridge` | `cells`); the effect families
-use a fixed per-type `seed` default when one is not given.
+`height` also accepts `kind` (`noise` | `ridge` | `cells`) and the variety
+knobs `freq` (base frequency, `cells` default 4), `octaves` (default 5),
+`angle` (rotate the sampling lattice) and `anisotropy` (stretch along the
+rotated v axis, `>= 1`); with no spec the `noise`/`ridge` output is
+byte-identical to the pre-knob formula, while `cells` seeds its lattice phases
+so two cell jobs no longer share one lattice. The effect families use a fixed
+per-type `seed` default when one is not given.
 
 Only `sources` writes files the jobs actually reference; the filter is the set
 of `inputs` basenames across all jobs (patterns, audio seeds, chunk archives,
@@ -699,11 +708,12 @@ pipeline and the rule for keeping the two in step.
 ## Examples
 
 [`examples/manifest.json`](examples/manifest.json) is a runnable config with
-texture, sky, normal map, nine effect frames (one per generator), LUT, motif,
-two impulse-response jobs, sprite-sheet jobs, embedded and file-mode
-`audio-clip` jobs, an `audio-stitch` bed, an `echo-map`, generated audio
-seeds/chunks and the `audio-pack` emitter. Every job is recorded, so it works
-offline with no key:
+texture, sky, three normal maps (including the `freq`/`octaves` ridge and
+`angle`/`anisotropy` brushed examples), eleven effect frames (one per
+generator), LUT, motif, two impulse-response jobs, sprite-sheet jobs, embedded
+and file-mode `audio-clip` jobs, an `audio-stitch` bed, an `echo-map`, generated
+audio seeds/chunks and the `audio-pack` emitter. Every job is recorded, so it
+works offline with no key:
 
 ```bash
 node bin/mothbake.mjs validate --config examples/manifest.json

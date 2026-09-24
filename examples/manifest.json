@@ -53,6 +53,26 @@
       "recorded": { "result": "../test/fixtures/height-grid.json" }
     },
     {
+      "id": "strata-normals",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "height", "size": 32, "seed": 11, "kind": "ridge", "freq": 5, "octaves": 6 },
+      "params": { "style": "xy", "strength": [0.35, 0.35], "reach": 0.15, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "strata-normals",
+      "bake": { "type": "normal-map", "name": "strata", "size": 32, "strength": 1.7 },
+      "recorded": { "result": "../test/fixtures/height-ridge-grid.json" }
+    },
+    {
+      "id": "brushed-normals",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "height", "size": 32, "seed": 83, "kind": "noise", "freq": 24, "octaves": 2, "angle": 0.4, "anisotropy": 8 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "brushed-normals",
+      "bake": { "type": "normal-map", "name": "brushed", "size": 32, "strength": 1.7 },
+      "recorded": { "result": "../test/fixtures/height-angle-grid.json" }
+    },
+    {
       "id": "rift-frame",
       "engine": "blur-core-v1",
       "credits": 1,
@@ -141,6 +161,26 @@
       "raw": "snow-frame",
       "bake": { "type": "effect-frame", "name": "effect-weather-snow", "index": 0, "fps": 10, "size": 48, "tint": "quantum" },
       "recorded": { "result": "../test/fixtures/snow-grid.json" }
+    },
+    {
+      "id": "dust-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "dust", "size": 32, "seed": 149 },
+      "params": { "style": "xy", "strength": [0.25, 0.25], "reach": 0.15, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "dust-frame",
+      "bake": { "type": "effect-frame", "name": "effect-dust", "index": 0, "fps": 10, "size": 48, "tint": "quantum" },
+      "recorded": { "result": "../test/fixtures/dust-grid.json" }
+    },
+    {
+      "id": "flow-frame",
+      "engine": "blur-core-v1",
+      "credits": 1,
+      "generateValues": { "type": "flow", "size": 32, "seed": 173 },
+      "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+      "raw": "flow-frame",
+      "bake": { "type": "effect-frame", "name": "effect-flow", "index": 0, "fps": 10, "size": 48, "tint": "plasma" },
+      "recorded": { "result": "../test/fixtures/flow-grid.json" }
     },
     {
       "id": "lut-pack",

@@ -34,13 +34,18 @@ does not exist.
 
 `generateValues` is resolved offline by `src/values.mjs` and injected as
 `params.values` at resolve time. The built-ins are `height` (a seamlessly
-tiling height field with `noise`/`ridge`/`cells` variants) and the effect
-family `radial`, `portal`, `spark`, `bloom`, `vortex`, `contract`, `rise`,
-`shield` and `snow`. Every generator is a pure function of its `{ type, size,
-seed, frame }` spec, returns a square grid of values in `[0, 1]`, and is
-covered by determinism, bounds and per-frame-variation tests. The effect grids
-share the integer-hash noise in `src/noise.mjs`, so a bake is reproducible on
-any platform. A module config can add its own generators under `generators`.
+tiling height field with `noise`/`ridge`/`cells` variants and the
+`freq`/`octaves`/`angle`/`anisotropy` variety knobs), the effect family
+`radial`, `portal`, `spark`, `bloom`, `vortex`, `contract`, `rise`, `shield`
+and `snow`, and the field generators `dust` (soft drifting accumulations) and
+`flow` (directional wear streaks). Every generator is a pure function of its
+`{ type, size, seed, frame, … }` spec, returns a square grid of values in
+`[0, 1]`, and is covered by determinism, bounds and per-frame-variation tests;
+the knobbed `height` field is also pinned byte-for-byte against the pre-knob
+formula. The effect grids share the integer-hash noise in `src/noise.mjs`
+(including the anisotropic `tileFbmXY` used by `flow`), so a bake is
+reproducible on any platform. A module config can add its own generators under
+`generators`.
 
 ### 3. Resolve (`src/api.mjs`, `src/runner.mjs`)
 

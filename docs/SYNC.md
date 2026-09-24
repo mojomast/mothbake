@@ -68,7 +68,7 @@ pipeline; "here" is `mothbake`.
 
 | Feature | Upstream | Here | Notes |
 | --- | --- | --- | --- |
-| `height` (`noise` \| `ridge` \| `cells`) | yes | yes | Identical constants and rounding. |
+| `height` (`noise` \| `ridge` \| `cells`) | yes | yes | Byte-identical defaults; `freq`/`octaves`/`angle`/`anisotropy` variety knobs and seed-derived `cells` lattice phases (deliberate 2026-09-24 change: two cell jobs no longer share one lattice). |
 | `radial` | yes | yes | Identical. |
 | `portal` | yes | yes | Identical. |
 | `spark` | yes | yes | Identical. |
@@ -78,6 +78,8 @@ pipeline; "here" is `mothbake`.
 | `rise` | yes | yes | Identical. |
 | `shield` | yes | yes | Identical. |
 | `snow` | yes | yes | Identical. |
+| `dust` | yes | yes | Identical; soft drifting patches, defaults `size 64`, `seed 149`. |
+| `flow` | yes | yes | Identical; directional +x streaks via anisotropic wrapping noise, defaults `size 64`, `seed 173`. |
 
 ### Source-art patterns
 
@@ -138,6 +140,27 @@ them and to the rights of any source material supplied.
 
 ## Sync log
 
+- **2026-09-24** — Height variety knobs and the `dust`/`flow` fields. Ported the
+  upstream `heightGrid(size, seed, kind, spec)` variety knobs (`freq`, `octaves`,
+  `angle`, `anisotropy`) and the missing `dust` and `flow` value generators
+  byte-for-byte (`dustGrid`, `flowGrid`; defaults `size 64`, seeds `149`/`173`),
+  with `generateValues` now passing the whole height spec through. Added the
+  helpers they need to `src/noise.mjs`: `valueNoiseXY`, `tileFbmXY` and
+  `smoothRange`. **Deliberate behavior change:** `kind: 'cells'` derives its
+  lattice phases from the seed, so two cell jobs no longer render one shared
+  lattice; the default `noise`/`ridge` output is byte-identical to the old
+  formula (the pre-knob formula is reconstructed and asserted in
+  `test/values.test.mjs`, and a 19-case sweep was diffed against the upstream
+  module during the port). No existing fixture or example used `kind: 'cells'`,
+  so no recorded fixture was invalidated by the change. Tests cover default
+  byte-compatibility, each knob's
+  effect, the exact seam properties (a quarter-turn rotation is a rotation of
+  the unrotated grid; integer anisotropy yields exact repeated bands), seeded
+  `cells`, dust/flow determinism, bounds and seed sensitivity, plus the recorded
+  example grids against the generators. Examples: `strata-normals` (ridge,
+  `freq`/`octaves`), `brushed-normals` (`angle`/`anisotropy`), `dust-frame` and
+  `flow-frame`, backed by recorded grid fixtures. Updated the README generator
+  table, `docs/ARCHITECTURE.md` and the capability matrix above.
 - **2026-09-20** — Merge-safe, atomic and validated publication. Added
   `src/publish.mjs` (`writeFileAtomic`, `assertJsonSafe`, `readJsonArtifact`,
   `readModuleArtifact`, `mergeBundles`, `mergeRecordsIntoBundle`,

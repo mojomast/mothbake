@@ -2,18 +2,83 @@
 // job params (`params.values`). This is how a bake stays reproducible without
 // shipping a hand-authored input grid in the manifest.
 
-import { tileFbm, fbm2, hash2 } from './noise.mjs';
+import { tileFbm, tileFbmXY, fbm2, hash2, smoothRange } from './noise.mjs';
 
-/** Seamlessly tiling non-negative height field. `kind`: noise | ridge | cells. */
-export function heightGrid(size = 32, seed = 1, kind = 'noise') {
+/**
+ * Seamlessly tiling non-negative height field. `kind`: noise | ridge | cells.
+ *
+ * The optional `spec` keys let a job describe a distinct relief instead of
+ * another seed of the same noise; every default reproduces the pre-knob output
+ * byte-for-byte.
+ *
+ *   freq: 8,          base tiling frequency (cells default: 4)
+ *   octaves: 5,       fbm octaves
+ *   angle: 0,         rotate the lattice before sampling (directional streaks)
+ *   anisotropy: 1,    stretch along the rotated v axis (>= 1)
+ *
+ * `kind: 'cells'` seeds its lattice phases from the seed, so two cell jobs with
+ * different seeds no longer share one lattice.
+ */
+export function heightGrid(size = 32, seed = 1, kind = 'noise', spec = {}) {
+  const freq = spec.freq ?? (kind === 'cells' ? 4 : 8);
+  const octaves = spec.octaves ?? 5;
+  const angle = spec.angle ?? 0;
+  const anisotropy = Math.max(1, spec.anisotropy ?? 1);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const wrap = (value) => value - Math.floor(value);
   return Array.from({ length: size }, (_, y) =>
     Array.from({ length: size }, (_, x) => {
       const u = x / size;
       const v = y / size;
-      let h = tileFbm(u, v, seed, 8, 5);
+      let h;
+      if (kind === 'cells') {
+        const phaseU = (seed % 97) * 0.0137;
+        const phaseV = (seed % 89) * 0.0119;
+        h = Math.abs(Math.sin((u * freq + phaseU) * Math.PI) * Math.cos((v * freq + phaseV) * Math.PI));
+      } else {
+        const cu = u - 0.5;
+        const cv = v - 0.5;
+        const ru = wrap(cu * cos - cv * sin + 0.5);
+        const rv = wrap((cu * sin + cv * cos) * anisotropy + 0.5);
+        h = tileFbm(ru, rv, seed, freq, octaves);
+      }
       if (kind === 'ridge') h = 1 - Math.abs(h * 2 - 1);
-      if (kind === 'cells') h = Math.abs(Math.sin(u * Math.PI * 4) * Math.cos(v * Math.PI * 4));
       return Math.round(h * 1000) / 1000;
+    }),
+  );
+}
+
+/**
+ * Broad, drifting dust/damp patches: a low-frequency wrapping field gated into
+ * soft accumulations. Non-negative and bounded to [0, 1]; a pure function of
+ * `size` and `seed`.
+ */
+export function dustGrid(size = 64, seed = 149) {
+  return Array.from({ length: size }, (_, y) =>
+    Array.from({ length: size }, (_, x) => {
+      const u = x / size;
+      const v = y / size;
+      const drift = tileFbm(u, v, seed, 3, 5);
+      const gate = smoothRange(0.34, 0.72, tileFbm(u, v, seed + 61, 2, 3));
+      return Math.round(Math.max(0, Math.min(1, smoothRange(0.28, 0.72, drift) * (0.35 + 0.65 * gate))) * 1000) / 1000;
+    }),
+  );
+}
+
+/**
+ * Directional wear/flow streaks: anisotropic wrapping noise, quick across the
+ * flow and slow along it, shaped into soft lanes that run along +x.
+ * Non-negative and bounded to [0, 1]; a pure function of `size` and `seed`.
+ */
+export function flowGrid(size = 64, seed = 173) {
+  return Array.from({ length: size }, (_, y) =>
+    Array.from({ length: size }, (_, x) => {
+      const u = x / size;
+      const v = y / size;
+      const streak = tileFbmXY(u, v, seed, 2.2, 11, 5);
+      const lane = smoothRange(0.32, 0.68, tileFbmXY(u, v, seed + 31, 1.4, 4.5, 3));
+      return Math.round(Math.max(0, Math.min(1, smoothRange(0.34, 0.72, streak) * (0.4 + 0.6 * lane))) * 1000) / 1000;
     }),
   );
 }
@@ -204,7 +269,7 @@ export function snowGrid(size = 32, frame = 0, seed = 107) {
  * `mothbake.config.mjs` (`generators: { myGrid: (spec) => grid }`).
  */
 export const generators = {
-  height: (spec) => heightGrid(spec.size ?? 32, spec.seed ?? 1, spec.kind ?? 'noise'),
+  height: (spec) => heightGrid(spec.size || 32, spec.seed || 1, spec.kind || 'noise', spec),
   radial: (spec) => radialGrid(spec.size ?? 32, spec.frame ?? 0, spec.seed ?? 3),
   portal: (spec) => portalGrid(spec.size ?? 32, spec.frame ?? 0, spec.seed ?? 41),
   spark: (spec) => sparkGrid(spec.size ?? 32, spec.frame ?? 0, spec.seed ?? 61),
@@ -214,6 +279,8 @@ export const generators = {
   rise: (spec) => riseGrid(spec.size ?? 32, spec.frame ?? 0, spec.seed ?? 71),
   shield: (spec) => shieldGrid(spec.size ?? 32, spec.frame ?? 0, spec.seed ?? 89),
   snow: (spec) => snowGrid(spec.size ?? 32, spec.frame ?? 0, spec.seed ?? 107),
+  dust: (spec) => dustGrid(spec.size || 64, spec.seed ?? 149),
+  flow: (spec) => flowGrid(spec.size || 64, spec.seed ?? 173),
 };
 
 export const generatorTypes = Object.keys(generators);
