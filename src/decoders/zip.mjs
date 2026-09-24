@@ -15,6 +15,11 @@ const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_SIGNATURE = 0x02014b50;
 const LOCAL_SIGNATURE = 0x04034b50;
 const MAX_CLASSIC = 0xffffffff;
+const DEFAULT_LIMITS = {
+  maxEntries: 4096,
+  maxEntryUncompressedBytes: 64 * 1024 * 1024,
+  maxTotalUncompressedBytes: 256 * 1024 * 1024,
+};
 // Fixed MS-DOS epoch (1980-01-01 00:00) keeps archives byte-deterministic.
 const DOS_DATE = 0x0021;
 const DOS_TIME = 0x0000;
@@ -23,52 +28,101 @@ const DOS_TIME = 0x0000;
  * Read a ZIP archive into a Map of entry name -> Buffer.
  *
  * @param {Buffer|Uint8Array} buf
+ * @param {{ maxEntries?: number, maxEntryUncompressedBytes?: number, maxTotalUncompressedBytes?: number }} [options]
+ *   Resource limits (defaults: 4096 entries, 64 MiB per entry, 256 MiB total).
  * @returns {Map<string, Buffer>}
  */
-export function unzip(buf) {
+export function unzip(buf, options = {}) {
+  if (!(buf instanceof Uint8Array)) throw new TypeError('zip: expected a Buffer or Uint8Array');
+  if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+  const limits = Object.fromEntries(Object.entries(DEFAULT_LIMITS).map(([key, value]) => [key, options?.[key] ?? value]));
+  for (const [key, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`zip: ${key} must be a non-negative safe integer`);
+  }
   let eocd = -1;
   const floor = Math.max(0, buf.length - 22 - 65536);
   for (let i = buf.length - 22; i >= floor; i--) {
-    if (buf.readUInt32LE(i) === EOCD_SIGNATURE) {
+    if (buf.readUInt32LE(i) === EOCD_SIGNATURE && i + 22 + buf.readUInt16LE(i + 20) === buf.length) {
       eocd = i;
       break;
     }
   }
   if (eocd < 0) throw new Error('zip: end-of-central-directory record not found');
+  if (buf.readUInt16LE(eocd + 4) !== 0 || buf.readUInt16LE(eocd + 6) !== 0 ||
+      buf.readUInt16LE(eocd + 8) !== buf.readUInt16LE(eocd + 10)) {
+    throw new Error('zip: multi-disk archives are unsupported');
+  }
   const count = buf.readUInt16LE(eocd + 10);
+  if (count > limits.maxEntries) throw new Error(`zip: entry count ${count} exceeds maxEntries=${limits.maxEntries}`);
   let off = buf.readUInt32LE(eocd + 16);
-  if (off >= buf.length) throw new Error('zip: central directory offset is outside the archive');
+  const centralStart = off;
+  const centralEnd = off + buf.readUInt32LE(eocd + 12);
+  if (off > eocd || centralEnd > eocd) throw new Error('zip: central directory is outside the archive');
   const files = new Map();
+  let total = 0;
   for (let n = 0; n < count; n++) {
-    if (off + 46 > buf.length || buf.readUInt32LE(off) !== CENTRAL_SIGNATURE) {
+    if (off + 46 > centralEnd || buf.readUInt32LE(off) !== CENTRAL_SIGNATURE) {
       throw new Error(`zip: corrupt central directory entry ${n}`);
     }
+    const flags = buf.readUInt16LE(off + 8);
     const method = buf.readUInt16LE(off + 10);
+    const expectedCrc = buf.readUInt32LE(off + 16);
     const compSize = buf.readUInt32LE(off + 20);
     const uncompSize = buf.readUInt32LE(off + 24);
     const nameLen = buf.readUInt16LE(off + 28);
     const extraLen = buf.readUInt16LE(off + 30);
     const commentLen = buf.readUInt16LE(off + 32);
     const localOffset = buf.readUInt32LE(off + 42);
-    if (localOffset + 30 > buf.length) throw new Error('zip: local header offset is outside the archive');
+    const next = off + 46 + nameLen + extraLen + commentLen;
+    if (next > centralEnd) throw new Error(`zip: corrupt central directory entry ${n} name or extra data`);
     const name = buf.toString('utf8', off + 46, off + 46 + nameLen);
+    if (!name || name.includes('\0') || name.startsWith('/') || name.startsWith('\\') ||
+        /^[a-zA-Z]:/.test(name) || name.split(/[/\\]/).some((part) => part === '..' || part === '.')) {
+      throw new Error(`zip: unsafe entry name ${JSON.stringify(name)}`);
+    }
+    if (flags & 1) throw new Error(`zip: encrypted entry unsupported for ${name}`);
+    if (uncompSize > limits.maxEntryUncompressedBytes) {
+      throw new Error(`zip: ${name} exceeds maxEntryUncompressedBytes=${limits.maxEntryUncompressedBytes}`);
+    }
+    total += uncompSize;
+    if (total > limits.maxTotalUncompressedBytes) {
+      throw new Error(`zip: archive exceeds maxTotalUncompressedBytes=${limits.maxTotalUncompressedBytes}`);
+    }
+    if (localOffset + 30 > centralStart || buf.readUInt32LE(localOffset) !== LOCAL_SIGNATURE) {
+      throw new Error(`zip: invalid local header for ${name}`);
+    }
     const localNameLen = buf.readUInt16LE(localOffset + 26);
     const localExtraLen = buf.readUInt16LE(localOffset + 28);
     const start = localOffset + 30 + localNameLen + localExtraLen;
+    if (start > centralStart || start + compSize > centralStart ||
+        localNameLen !== nameLen || !buf.subarray(localOffset + 30, localOffset + 30 + localNameLen).equals(buf.subarray(off + 46, off + 46 + nameLen)) ||
+        buf.readUInt16LE(localOffset + 8) !== method || buf.readUInt16LE(localOffset + 6) !== flags) {
+      throw new Error(`zip: local header mismatch or truncated payload for ${name}`);
+    }
+    // Data descriptors allow placeholder sizes and CRC in the local header.
+    if ((!(flags & 8) && (buf.readUInt32LE(localOffset + 14) !== expectedCrc ||
+        buf.readUInt32LE(localOffset + 18) !== compSize || buf.readUInt32LE(localOffset + 22) !== uncompSize)) ||
+        ((flags & 8) && ((buf.readUInt32LE(localOffset + 14) !== 0 && buf.readUInt32LE(localOffset + 14) !== expectedCrc) ||
+          (buf.readUInt32LE(localOffset + 18) !== 0 && buf.readUInt32LE(localOffset + 18) !== compSize) ||
+          (buf.readUInt32LE(localOffset + 22) !== 0 && buf.readUInt32LE(localOffset + 22) !== uncompSize)))) {
+      throw new Error(`zip: local header sizes or CRC mismatch for ${name}`);
+    }
     const comp = buf.subarray(start, start + compSize);
+    let data;
     if (method === 0) {
-      files.set(name, Buffer.from(comp));
+      data = Buffer.from(comp);
     } else if (method === 8) {
-      const data = zlib.inflateRawSync(comp);
-      if (uncompSize && data.length !== uncompSize) {
-        throw new Error(`zip: ${name} inflated to ${data.length} bytes, expected ${uncompSize}`);
-      }
-      files.set(name, data);
+      // The extra byte catches forged zero/undersized headers without permitting unbounded inflation.
+      data = zlib.inflateRawSync(comp, { maxOutputLength: Math.min(uncompSize + 1, limits.maxEntryUncompressedBytes + 1, limits.maxTotalUncompressedBytes - (total - uncompSize) + 1) });
     } else {
       throw new Error(`zip: compression method ${method} unsupported for ${name} (only stored/deflate)`);
     }
-    off += 46 + nameLen + extraLen + commentLen;
+    if (data.length !== uncompSize) throw new Error(`zip: ${name} decoded to ${data.length} bytes, expected ${uncompSize}`);
+    if (crc32(data) !== expectedCrc) throw new Error(`zip: CRC mismatch for ${name}`);
+    files.set(name, data);
+    off = next;
   }
+  if (off !== centralEnd) throw new Error('zip: central directory size mismatch');
   return files;
 }
 

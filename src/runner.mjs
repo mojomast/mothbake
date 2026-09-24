@@ -249,6 +249,7 @@ function writeBackJobIds({ config, configFile, writeBack, log }) {
  *   strict?: boolean, writeBack?: boolean, log?: (message: string) => void,
  *   fetchImpl?: typeof fetch, sleepImpl?: (ms: number) => Promise<void>,
  *   nowImpl?: () => number, randomImpl?: () => number,
+ *   maxApiResponseBytes?: number, maxDownloadBytes?: number,
  * }} options
  */
 export async function runConfig(options = {}) {
@@ -280,7 +281,7 @@ export async function runConfig(options = {}) {
   const baseUrl = resolveBaseUrl({ base: options.base, configBaseUrl: config.baseUrl, env });
   const api = dry
     ? null
-    : createApi({ baseUrl, key: options.key ?? null, env, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl, nowImpl: options.nowImpl, randomImpl: options.randomImpl, log });
+    : createApi({ baseUrl, key: options.key ?? null, env, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl, nowImpl: options.nowImpl, randomImpl: options.randomImpl, maxApiResponseBytes: options.maxApiResponseBytes, maxDownloadBytes: options.maxDownloadBytes, log });
 
   for (const job of jobs) {
     if (job.enabled === false) {
@@ -342,7 +343,9 @@ export async function runConfig(options = {}) {
       provenance[job.id] = {
         engine: job.engine,
         jobId: job.jobId || null,
-        mode: job.mode || job.params?.mode || 'emu',
+        // A requested mode is not evidence of the backend actually used.
+        // In particular, an omitted mode must not become an invented "emu".
+        mode: job.mode ?? job.params?.mode ?? null,
         name: job.bake?.name ?? null,
         credits: job.credits ?? null,
       };

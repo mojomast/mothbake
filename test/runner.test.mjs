@@ -65,6 +65,22 @@ test('runConfig --dry reports the planned actions and writes nothing', async (t)
   assert.ok(!fs.existsSync(outDir), 'dry runs write nothing');
 });
 
+test('recorded provenance leaves unknown mode unknown and does not infer billed credits', async (t) => {
+  const outDir = path.join(ROOT, 'test', 'tmp', `provenance-${process.pid}-${Date.now()}`);
+  t.after(() => fs.rmSync(outDir, { recursive: true, force: true }));
+  const config = {
+    jobs: [
+      { id: 'unknown', engine: 'blur-core-v1', credits: 2, recorded: { result: { output: [[0, 8], [1, 2]] } } },
+      { id: 'requested', engine: 'blur-core-v1', mode: 'aer', recorded: { result: { output: [[1]] } } },
+    ],
+  };
+  const result = await runConfig({ config, outDir, log: () => {} });
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.provenance.unknown.mode, null);
+  assert.equal(result.provenance.unknown.credits, 2, 'manifest estimate is retained unchanged');
+  assert.equal(result.provenance.requested.mode, 'aer', 'requested mode is retained, not backend proof');
+});
+
 test('runConfig strict rethrows the first job failure instead of collecting it', async (t) => {
   const dir = path.join(ROOT, 'test', 'tmp', `strict-${process.pid}-${Date.now()}`);
   fs.mkdirSync(dir, { recursive: true });

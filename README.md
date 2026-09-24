@@ -32,7 +32,8 @@ sprite sheets, material LUTs, impulse responses, audio clips, motifs and seeds.
 - **Failures are per job.** One bad job is reported and the rest still run; add
   `--strict` to stop at the first failure.
 - **Provenance by default.** Bundles carry `engine`, `jobId`, `mode` and
-  `credits` per job, and a successful live submission writes its `jobId` back,
+  `credits` per job (`null` when the mode is unknown; credits are manifest
+  estimates, not confirmed billing), and a successful live submission writes its `jobId` back,
   so a re-run downloads instead of paying again.
 - **Merge-safe publication.** Aggregate emitters can opt into `merge: true`, so
   a partial run (`--only`, disabled jobs, a failed job) overlays its records on
@@ -437,7 +438,7 @@ directory.
 | `raw` | Raw-output directory name under `<out>/raw/` (default: the job `id`). |
 | `enabled` | `false` skips the job. |
 | `jobId` | Cached job id; reused only while the API reports it `completed`. |
-| `credits`, `mode`, `assetIds`, `comment` | Provenance and metadata: `credits` and `mode` are passed through, `assetIds` is the persisted `inputFrom` state written back after a run, `comment` is ignored. |
+| `credits`, `mode`, `assetIds`, `comment` | Provenance and metadata: `credits` is only a manifest estimate; `mode` is a requested mode, `null` when absent (not proof of actual backend); `assetIds` is the persisted `inputFrom` state written back after a run, `comment` is ignored. |
 
 ### Recorded results
 
@@ -576,6 +577,7 @@ decoded output slots, the inline result, the job, and the bake options.
 | `material-lut` | ZIP | `{ size, format: 'rgb8', r, t }` (base64) | `slot`, `name`, `bucket`, `size`, `reflectance`, `transmittance` |
 | `normal-map` | grid result | RGBA tangent-space normals (base64) | `name`, `bucket`, `size`, `strength` |
 | `effect-frame` | grid result | one RGBA frame; same `bucket`+`key` merges into `{ fps, frames }` | `name`, `effect`, `bucket`, `size`, `index`, `fps`, `tint`, `ramp`, `ramps` |
+| `raw-grid` | numeric inline grid | `{ width, height, values }` with original unnormalized numbers | `name`, `bucket` |
 | `level-graph` | inline JSON | `{ name, rows, cols, numQubits, coupling, cells, measurements, metrics }` | `name`, `bucket`, `maxMeasurements` |
 | `motif` | MIDI | `{ bpm, ppq, notes: [{ step, midi, dur, vel }] }` (steps in sixteenths) | `slot`, `name`, `bucket`, `maxNotes`, `transpose` |
 | `ir` (alias `ir-descriptor`) | WAV (+ taps JSON) | `{ file, url, seconds, sampleRate, channels, format, taps }` | `slot`, `tapsSlot`, `name`, `bucket`, `maxTaps`, `url`, `urlBase` |
@@ -594,6 +596,17 @@ Notes:
   `bake.name` is absent, so an effect can be named independently of the record.
 - Grid-based bakers accept the inline result, a `{ result: … }` response, or a
   `{ output: … }` value, so the same config works for live and recorded runs.
+  `raw-grid` preserves the data for scientific analysis; image-oriented bakers
+  rescale for display. See the [offline raw-grid example and observed workflow
+  notes](docs/OBSERVED_WORKFLOWS.md) for the provenance and media boundaries.
+- API JSON responses are capped at 8 MiB and downloaded outputs at 256 MiB,
+  including responses without an accurate `Content-Length`. Programmatic
+  `createApi`/`runConfig` callers may set `maxApiResponseBytes` and
+  `maxDownloadBytes` (non-negative byte counts) for known larger assets.
+  `unzip(bytes, { maxEntries, maxEntryUncompressedBytes,
+  maxTotalUncompressedBytes })` defaults to 4096 entries, 64 MiB per entry
+  and 256 MiB total; it rejects corrupt CRCs and unsafe member paths. A
+  material-LUT baker using the defaults will reject archives beyond them.
 - `sprite-sheet` packs the composited GIF frames left-to-right, wrapping to a
   new row at `maxWidth` (default 2048). The sheet is trimmed to the used area
   unless `powerOfTwo` pads both axes. Consecutive identical frames are not given

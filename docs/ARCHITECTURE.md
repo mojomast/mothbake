@@ -143,6 +143,7 @@ The built-in bakers are thin wrappers over the decoders:
 | `texture-tile`, `sky` | `decodePng`, `resizeNearest` |
 | `material-lut` | `unzip`, `decodeHdr`, `hdrToRgb8` |
 | `normal-map`, `effect-frame` | `resampleGrid`, `gridToNormal`, `gridToRamp` |
+| `raw-grid` | none (copies a validated numeric inline grid without image scaling) |
 | `motif` | `decodeMidi` |
 | `ir` / `ir-descriptor` | `wavInfo` |
 | `sprite-sheet` | `decodeGif` |

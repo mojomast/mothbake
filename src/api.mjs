@@ -16,6 +16,9 @@ export const DEFAULT_MAX_RETRIES = 5;
 export const DEFAULT_RETRY_BASE_MS = 1000;
 export const DEFAULT_RETRY_CAP_MS = 30000;
 export const DEFAULT_RETRY_AFTER_CAP_MS = 120000;
+export const DEFAULT_MAX_API_RESPONSE_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+const MAX_ERROR_DETAIL_LENGTH = 200;
 
 const CONTENT_TYPES = {
   '.png': 'image/png',
@@ -135,6 +138,60 @@ export function normalizeContentType(value) {
   return value.split(';')[0].trim().toLowerCase();
 }
 
+function byteLimit(value, name) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${name} must be a non-negative safe integer`);
+  return value;
+}
+
+// Only expose short, plain-language server details. A server can include
+// presigned URLs, credentials, or arbitrary output in a detail/title field.
+function safeDetail(value, key) {
+  if (typeof value !== 'string') return '';
+  const detail = value.trim();
+  if (/https?:\/\/|[?&][\w.-]+=|\b(?:bearer|authorization|secret|token|signature|password|api[_-]?key)\b/i.test(detail)
+    || (key && detail.includes(key))) return '';
+  return detail.slice(0, MAX_ERROR_DETAIL_LENGTH);
+}
+
+async function readLimited(response, limit, kind) {
+  const length = response.headers?.get?.('content-length');
+  if (length != null && /^\d+$/.test(String(length).trim()) && Number(length) > limit) {
+    await response.body?.cancel?.().catch(() => {});
+    throw new ApiError(`${kind} exceeds ${limit} byte limit`);
+  }
+  const body = response.body;
+  if (body != null) {
+    // Never use text()/arrayBuffer() when a body exists: those methods would
+    // allocate the entire response before the limit could be checked.
+    if (typeof body.getReader !== 'function') throw new TypeError(`${kind} body is not a readable stream`);
+    const reader = body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit) throw new ApiError(`${kind} exceeds ${limit} byte limit`);
+        chunks.push(value);
+      }
+      return Buffer.concat(chunks, size);
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  // Legacy injectable fetch mocks may only provide text()/arrayBuffer().
+  // Native fetch always supplies a body for non-empty responses.
+  const data = kind === 'API response'
+    ? Buffer.from(await response.text(), 'utf8')
+    : Buffer.from(await response.arrayBuffer());
+  if (data.length > limit) throw new ApiError(`${kind} exceeds ${limit} byte limit`);
+  return data;
+}
+
 /**
  * Create a client bound to a base URL and (optional) key.
  *
@@ -148,6 +205,9 @@ export function normalizeContentType(value) {
  *
  * `nowImpl`/`randomImpl` exist so tests can run in virtual time with a
  * deterministic jitter; production callers never pass them.
+ * `maxApiResponseBytes` (default 8 MiB) and `maxDownloadBytes` (default
+ * 256 MiB) cap response bodies, including when Content-Length is absent or
+ * incorrect. Limits are inclusive and accept non-negative safe integers.
  *
  * @param {{
  *   baseUrl?: string, key?: string, env?: object,
@@ -155,7 +215,8 @@ export function normalizeContentType(value) {
  *   nowImpl?: () => number, randomImpl?: () => number,
  *   log?: Function, minIntervalMs?: number, maxRetries?: number,
  *   retryBaseMs?: number, retryCapMs?: number, retryAfterCapMs?: number,
- *   pollIntervalMs?: number, pollMaxIntervalMs?: number,
+  *   pollIntervalMs?: number, pollMaxIntervalMs?: number,
+  *   maxApiResponseBytes?: number, maxDownloadBytes?: number,
  * }} [options]
  */
 export function createApi(options = {}) {
@@ -177,6 +238,8 @@ export function createApi(options = {}) {
   const retryAfterCapMs = options.retryAfterCapMs ?? DEFAULT_RETRY_AFTER_CAP_MS;
   const pollIntervalMs = options.pollIntervalMs ?? envNumber('MOTH_POLL_INTERVAL_MS', DEFAULT_POLL_INTERVAL_MS, env);
   const pollMaxIntervalMs = options.pollMaxIntervalMs ?? envNumber('MOTH_POLL_MAX_INTERVAL_MS', DEFAULT_POLL_MAX_INTERVAL_MS, env);
+  const maxApiResponseBytes = byteLimit(options.maxApiResponseBytes ?? DEFAULT_MAX_API_RESPONSE_BYTES, 'maxApiResponseBytes');
+  const maxDownloadBytes = byteLimit(options.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES, 'maxDownloadBytes');
 
   // Concurrency-1 gate: request starts are serialized and spaced by at least
   // `minIntervalMs` (start-to-start, so the client never exceeds 1/interval).
@@ -210,16 +273,19 @@ export function createApi(options = {}) {
             },
             body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
           });
-          return { response: res, text: await res.text() };
+          return { response: res, text: (await readLimited(res, maxApiResponseBytes, 'API response')).toString('utf8') };
         }));
       } catch (error) {
         // A submit that dies on the wire may already have created a paid job:
         // fail closed, never auto-retry it.
-        if (submit) throw submitAmbiguousError(label, error.message, error);
-        if (!isTransientNetworkError(error) || retries >= maxRetries) throw error;
+        if (submit) throw submitAmbiguousError(label, error instanceof ApiError ? error.message : 'request failed', error);
+        if (!isTransientNetworkError(error) || retries >= maxRetries) {
+          if (error instanceof ApiError) throw error;
+          throw new Error(safeDetail(error.message, key) || 'request failed');
+        }
         retries += 1;
         const waitMs = backoffMs(retries, retryBaseMs, retryCapMs, randomImpl);
-        log(`  ${label} failed (${error.message}), retrying in ${formatWait(waitMs)} (attempt ${retries}/${maxRetries})`);
+        log(`  ${label} failed (network error), retrying in ${formatWait(waitMs)} (attempt ${retries}/${maxRetries})`);
         await sleepImpl(waitMs);
         continue;
       }
@@ -239,7 +305,7 @@ export function createApi(options = {}) {
         json = null;
       }
       if (!response.ok && !(allowNotModified && response.status === 304)) {
-        const detail = json?.detail || json?.title || text.slice(0, 200);
+        const detail = safeDetail(json?.detail || json?.title, key);
         const suffix = retryable ? ` (rate limited; gave up after ${maxRetries} retr${maxRetries === 1 ? 'y' : 'ies'})` : '';
         const error = new ApiError(`${label} -> ${response.status}${detail ? `: ${detail}` : ''}${suffix}`, {
           status: response.status,
@@ -348,15 +414,21 @@ export function createApi(options = {}) {
    * download cannot silently become an empty artifact.
    */
   async function downloadOutput(url, downloadOptions = {}) {
-    const response = await fetchImpl(url);
-    if (!response.ok) throw new Error(`download ${url} -> ${response.status}`);
+    let response;
+    try {
+      response = await fetchImpl(url);
+    } catch {
+      throw new Error('download: request failed');
+    }
+    if (!response.ok) throw new Error(`download -> ${response.status}`);
     const declared = normalizeContentType(downloadOptions.contentType);
     const actual = normalizeContentType(response.headers?.get?.('content-type'));
     if (declared && actual !== declared) {
-      throw new Error(`download ${url}: content-type "${actual || '(none)'}" does not match the declared "${declared}"`);
+      const safeType = (type) => /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type) ? type : '(none)';
+      throw new Error(`download: content-type "${safeType(actual)}" does not match the declared "${safeType(declared)}"`);
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (!buffer.length) throw new Error(`download ${url}: empty body`);
+    const buffer = await readLimited(response, maxDownloadBytes, 'download');
+    if (!buffer.length) throw new Error('download: empty body');
     return buffer;
   }
 
@@ -378,5 +450,7 @@ export function createApi(options = {}) {
     retryCapMs,
     pollIntervalMs,
     pollMaxIntervalMs,
+    maxApiResponseBytes,
+    maxDownloadBytes,
   };
 }

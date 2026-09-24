@@ -1,0 +1,16 @@
+{
+  "jobs": [
+    {
+      "id": "synthetic-field",
+      "engine": "blur-core-v1",
+      "recorded": {
+        "result": {
+          "output": [[0, 8], [1, 2]],
+          "provenance": { "backend": "unknown", "note": "handcrafted offline example, not an Atlas measurement" }
+        }
+      },
+      "bake": { "type": "raw-grid", "name": "field" }
+    }
+  ],
+  "emitter": { "type": "json", "file": "field.json" }
+}

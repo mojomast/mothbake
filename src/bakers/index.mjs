@@ -30,8 +30,9 @@ import * as spriteSheet from './sprite-sheet.mjs';
 import * as audioClip from './audio-clip.mjs';
 import * as audioStitch from './audio-stitch.mjs';
 import * as echoMap from './echo-map.mjs';
+import * as rawGrid from './raw-grid.mjs';
 
-const modules = [textureTile, sky, materialLut, normalMap, effectFrame, levelGraph, motif, ir, seed, spriteSheet, audioClip, audioStitch, echoMap];
+const modules = [textureTile, sky, materialLut, normalMap, effectFrame, levelGraph, motif, ir, seed, spriteSheet, audioClip, audioStitch, echoMap, rawGrid];
 
 export const bakers = Object.fromEntries(modules.map((module) => [module.type, module.bake]));
 // `ir-descriptor` is an explicit alias for the `ir` baker.

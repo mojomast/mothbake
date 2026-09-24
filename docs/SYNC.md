@@ -63,6 +63,7 @@ pipeline; "here" is `mothbake`.
 | `audio-clip` | yes | yes | Options: `slot`, `name`, `bucket`, `trim`, `threshold`, `pad`, `trimStart`, `trimEnd`, `normalize`, `peak`, `sampleFormat`, `loopStart`, `loopEnd`, `mixdown`, `maxChannels`; here also `embed`, `file`, `url`/`urlBase`, `detectLoop`/`loopSearch`/`loopWindow`/`loopThreshold`, `loopCrossfade`, `targetSampleRate`, `maxSeconds`, `meta`. |
 | `audio-stitch` | yes | yes | Ordered WAV concatenation with per-slot `gain`, equal-power `crossfadeMs`, shared descriptor options and loop/crossfade support. |
 | `echo-map` | yes | yes | Recursive `extras.taps`/`data.extras.taps` extraction into a compact `{ lattice, sites, depth, seed, count, taps, irFile, irUrl }` record. |
+| `raw-grid` | no | yes | Here-only exact numeric inline-grid record; no display scaling or implicit probability normalization. |
 
 ### Value generators
 
@@ -114,6 +115,13 @@ pipeline; "here" is `mothbake`.
 | Download validation (status, declared content type, empty body) | yes | yes | `res.ok` plus declared-vs-actual content-type (parameters/case ignored) and empty-body rejection. Raw archives are written atomically. |
 | Output-asset-id capture + `inputFrom` chaining | yes | yes | Captures `output_asset_id`, persists `job.assetIds`, and resolves a later job's input from the run, the config, or a re-upload. |
 | API client (engines, jobs, assets, polling) | yes | yes | Injectable `fetch`/`sleep` for offline tests, plus `nowImpl`/`randomImpl` for virtual-time tests. One paced request gate, credit-safe retries (a submit retries only on 429) and adaptive polling. |
+
+**2026-09-24 (here-only integration follow-up).** Added exact `raw-grid`
+records, corrected missing mode provenance to `null`, bounded API downloads
+and ZIP extraction with corruption/path checks. The offline synthetic example
+and [observed workflow notes](OBSERVED_WORKFLOWS.md) distinguish measured
+provider results from local processing. This does not introduce global credit
+accounting, claim an undocumented engine schema, or redistribute private packs.
 
 ## Deliberately not ported
 

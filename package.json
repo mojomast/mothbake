@@ -31,6 +31,7 @@
     "bin/",
     "src/",
     "docs/",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
