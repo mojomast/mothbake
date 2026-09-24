@@ -4,17 +4,44 @@
 
 **Manifest-driven asset baking with zero runtime dependencies.**
 
-`mothbake` runs a list of jobs against an asset-generation API, decodes every
-result itself (PNG, GIF, ZIP, Radiance HDR, WAV, MIDI), reduces each result to a
-small portable record, and emits whatever your project consumes: decoded files,
-sprite-sheet atlases, one JSON bundle, a generated ES module, or a custom
-emitter you write in a few lines.
+`mothbake` turns a manifest of engine jobs into committed asset files. Each job
+names an engine, its inputs and parameters, and the bake that should turn the
+result into a portable record. `mothbake` submits the job, decodes the result
+itself (PNG, GIF, ZIP, Radiance HDR, WAV, MIDI), and runs the emitters that
+write what your project consumes: decoded images, sprite-sheet atlases, one JSON
+bundle, a generated ES module, or a custom emitter you write in a few lines.
 
-It is built for pipelines where baked data must be deterministic, committed to
-the repository, and readable at runtime without a browser decoder, a build step,
-or an npm dependency tree — game textures, skyboxes, normal maps, animation
-frames, sprite sheets, material LUTs, impulse responses, audio clips, motifs and
-seeds.
+It is built for pipelines where baked data has to be deterministic, reviewed and
+shipped with the code — game textures, skyboxes, normal maps, animation frames,
+sprite sheets, material LUTs, impulse responses, audio clips, motifs and seeds.
+
+## Why it fits a repository
+
+- **Zero runtime dependencies.** Every decoder lives in this repository — PNG
+  (filters 0–4, colour types 0/2/3/4/6), GIF87a/89a (LZW, interlace,
+  transparency, disposal, loops), ZIP (stored/deflate read *and* write),
+  Radiance RGBE (flat and modern RLE), WAV (PCM 8/16/24/32-bit and 32-bit float
+  decode + encode) and Standard MIDI (format 0/1). Auditable, and installable in
+  air-gapped CI.
+- **Offline-first.** Any job can carry a `recorded` block, so examples and tests
+  run the *same* pipeline with no key and no network.
+- **Records are portable data.** A baker returns `{ bucket, key, value }`;
+  records diff, cache and ship well, and emitters decide the final shape.
+- **Deterministic output.** Bucket order is first-seen, and the ESM emitter is
+  covered by a byte-for-byte golden test.
+- **Failures are per job.** One bad job is reported and the rest still run; add
+  `--strict` to stop at the first failure.
+- **Provenance by default.** Bundles carry `engine`, `jobId`, `mode` and
+  `credits` per job, and a successful live submission writes its `jobId` back,
+  so a re-run downloads instead of paying again.
+- **Merge-safe publication.** Aggregate emitters can opt into `merge: true`, so
+  a partial run (`--only`, disabled jobs, a failed job) overlays its records on
+  the previous artifact instead of dropping everything it did not just bake.
+  Writes are atomic and validated as exact JSON first.
+- **Offline repair.** `mothbake repair` rebuilds the purely local, file-derived
+  records (`ir`, `echo-map`, `audio-clip`, `audio-stitch`) from the raw outputs a
+  run already archived — a baker fix can be re-applied to a committed bake
+  without re-paying for the engine run.
 
 ## Gallery
 
@@ -50,52 +77,6 @@ by a compatibility renderer.
 
 <!-- GALLERY:END -->
 
-## Features
-
-- **Zero runtime dependencies.** Every decoder is in this repository — PNG
-  (filters 0–4, colour types 0/2/3/4/6), GIF87a/89a (LZW, interlace,
-  transparency, disposal, loops), ZIP (stored/deflate read *and* write),
-  Radiance RGBE (flat and modern RLE), WAV (PCM 8/16/24/32-bit and 32-bit float
-  decode + encode) and Standard MIDI (format 0/1). Auditable and installable in
-  air-gapped CI.
-- **Config is data or code.** A `mothbake.json` manifest, or a
-  `mothbake.config.mjs` module when you want custom bakers, emitters or value
-  generators.
-- **Portable records.** A baker turns a finished job into a JSON-serializable
-  `{ bucket, key, value }` fragment. Records diff, cache and ship well; emitters
-  decide the final shape.
-- **Offline-first.** Any job can carry a `recorded` block, so examples and tests
-  run the *same* pipeline with no key and no network.
-- **Failures are per job.** One bad job is reported and the rest still run; the
-  command exits `1` at the end. Add `--strict` to stop at the first failure.
-- **Offline repair.** `mothbake repair` rebuilds the purely local, file-derived
-  records (`ir`, `echo-map`, `audio-clip`, `audio-stitch`) from the raw outputs a
-  run already archived, then re-runs the emitters — no API key and no credits,
-  so a baker fix can be re-applied to a committed bake.
-- **Merge-safe publication.** Aggregate emitters can opt into `merge: true`, so
-  a partial run (`--only`, disabled jobs, or a failed job) overlays this run's
-  records on the previous artifact instead of dropping everything it did not
-  just bake. Writes are atomic (same-directory temp + rename) and validated as
-  exact JSON first: NaN, `undefined`, array holes, cycles and non-plain objects
-  are rejected with the offending path, and a rejected write leaves the
-  previous artifact byte-identical.
-- **Provenance by default.** Bundles carry `engine`, `jobId`, `mode` and
-  `credits` per job, and successful live submissions write their `jobId` back so
-  the next run downloads instead of paying again. A recorded job that is not
-  `completed` is never silently resubmitted: the run fails and names `--force`.
-  Captured `output_asset_id`s are persisted too, and a later job can reuse one
-  with `inputFrom`.
-- **Deterministic output.** Bucket order is first-seen and the ESM emitter is
-  covered by a byte-for-byte golden test.
-
-## Requirements
-
-| | |
-| --- | --- |
-| Node.js | 20 or newer (ESM) |
-| Dependencies | none, at runtime or install time |
-| API key | `MOTH_API_KEY`, only for `catalog` and for `run` when a selected job is not recorded |
-
 ## Install
 
 ```bash
@@ -105,17 +86,35 @@ node bin/mothbake.mjs --help
 ```
 
 That is the whole install — there is nothing to build and nothing to fetch.
+Optionally put the command on your `PATH` with `npm link`.
 
-Optionally put the command on your `PATH`:
-
-```bash
-npm link          # then: mothbake --help
-```
+| | |
+| --- | --- |
+| Node.js | 20 or newer (ESM) |
+| Dependencies | none, at runtime or install time |
+| API key | `MOTH_API_KEY`, only for `catalog` and for `run` when a selected job is not recorded |
 
 ## Quick start
 
+The bundled example runs end to end with no API key and no network, because
+every job carries a recorded result:
+
 ```bash
-# 1. Describe what to bake.
+git clone https://github.com/mojomast/mothbake.git
+cd mothbake
+node bin/mothbake.mjs validate --config examples/manifest.json
+node bin/mothbake.mjs sources  --config examples/manifest.json
+node bin/mothbake.mjs run      --config examples/manifest.json --out out/examples
+```
+
+`sources` renders the procedural input art locally (free and deterministic);
+`run` bakes all 26 example jobs from the recorded results into
+`out/examples/`: decoded files per bucket, `raw/` archives, `index.json`, the
+sprite-sheet atlas, an `audio-pack` bundle and a generated `baked.mjs` module.
+
+For your own pipeline, write a manifest and go live:
+
+```bash
 cat > mothbake.json <<'JSON'
 {
   "jobs": [
@@ -132,43 +131,160 @@ cat > mothbake.json <<'JSON'
 }
 JSON
 
-# 2. Check the manifest, then see what a run would do.
-node bin/mothbake.mjs validate
-node bin/mothbake.mjs run --dry
-
-# 3. Render local source art (free, offline), then bake for real.
-node bin/mothbake.mjs sources
-MOTH_API_KEY=... node bin/mothbake.mjs run
+node bin/mothbake.mjs validate     # check the manifest (no key needed)
+node bin/mothbake.mjs sources      # render source art locally, free
+node bin/mothbake.mjs run --dry    # plan the run: no API call, no writes
+MOTH_API_KEY=... node bin/mothbake.mjs run   # bake for real
 ```
 
-Every artifact is written under `mothbake-out/` (change it with `--out`):
+A live run writes under `mothbake-out/` by default (change it with `--out`):
 decoded files per bucket, `raw/` archives of the engine results, `index.json`,
 and the `baked.mjs` module the config asked for.
 
-A complete offline example — texture, sky, three normal maps (default noise,
-ridged strata and an angled/anisotropic brushed field), eleven effect frames
-(radial, portal, spark, bloom, vortex, contract, rise, shield, snow, dust and
-flow generators), LUT, motif, two impulse responses (including an open-air
-room), an animated GIF sprite sheet, embedded and file-mode audio clips, a
-stitched clip, an echo map, generated audio seeds/chunks and an `audio-pack`
-bundle — lives in
-[`examples/manifest.json`](examples/manifest.json):
+## How the API is used
 
-```bash
-node bin/mothbake.mjs run --config examples/manifest.json --out out/examples
+A job is data: an `engine` plus engine-specific `params`, optional `inputs` to
+upload, and a `bake` that turns the finished result into a portable record.
+`generateValues` grids are synthesised locally and injected as `params.values`,
+so an engine that expects an input grid never needs a committed one.
+
+The snippets below are the example jobs without their `recorded` blocks (the
+manifest carries those so the same jobs run offline); everything else matches
+[`examples/manifest.json`](examples/manifest.json).
+
+**Image bake.** Upload a PNG, get a decoded texture record. This is the
+`rock-tile` job:
+
+```jsonc
+{
+  "id": "rock-tile",
+  "engine": "blur-v1",
+  "credits": 1,
+  "inputs": { "image": "sources/rock.png" },
+  "params": { "strength": 0.32, "style": "ry", "reach": 0.35, "size": 256, "downscale": true },
+  "raw": "rock-tile",
+  "bake": { "type": "texture-tile", "name": "rock", "size": 64 }
+}
 ```
 
-## CLI reference
+`texture-tile` decodes the PNG and returns
+`{ bucket: "textures", key: "rock", value: { width, height, format: "rgba8", data } }`;
+with the default `files` emitter that becomes `textures/rock.png`, and with
+`esm` it appears as `BAKED.textures.rock`.
+
+**Generator bakes.** The grid is built locally, injected as `params.values`,
+and the engine result is baked into normals. `strata-normals` uses the `height`
+variety knobs; `brushed-normals` adds `angle` and `anisotropy` for directional
+grain (both jobs are in the example manifest):
+
+```jsonc
+[
+  {
+    "id": "strata-normals",
+    "engine": "blur-core-v1",
+    "credits": 1,
+    "generateValues": { "type": "height", "size": 32, "seed": 11, "kind": "ridge", "freq": 5, "octaves": 6 },
+    "params": { "style": "xy", "strength": [0.35, 0.35], "reach": 0.15, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+    "raw": "strata-normals",
+    "bake": { "type": "normal-map", "name": "strata", "size": 32, "strength": 1.7 }
+  },
+  {
+    "id": "brushed-normals",
+    "engine": "blur-core-v1",
+    "credits": 1,
+    "generateValues": { "type": "height", "size": 32, "seed": 83, "kind": "noise", "freq": 24, "octaves": 2, "angle": 0.4, "anisotropy": 8 },
+    "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+    "raw": "brushed-normals",
+    "bake": { "type": "normal-map", "name": "brushed", "size": 32, "strength": 1.7 }
+  }
+]
+```
+
+`normal-map` resamples the returned grid to `bake.size` and returns
+`{ bucket: "normals", key: "strata", value: { width, height, format: "rgba8", data } }`,
+a tangent-space normal map. Generator output is pure and deterministic, so the
+same manifest always describes the same relief — see
+[Value generators](#value-generators) for every knob.
+
+**Effect frames.** The `dust` and `flow` field generators, baked one frame per
+job (again from the example manifest):
+
+```jsonc
+[
+  {
+    "id": "dust-frame",
+    "engine": "blur-core-v1",
+    "credits": 1,
+    "generateValues": { "type": "dust", "size": 32, "seed": 149 },
+    "params": { "style": "xy", "strength": [0.25, 0.25], "reach": 0.15, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+    "raw": "dust-frame",
+    "bake": { "type": "effect-frame", "name": "effect-dust", "index": 0, "fps": 10, "size": 48, "tint": "quantum" }
+  },
+  {
+    "id": "flow-frame",
+    "engine": "blur-core-v1",
+    "credits": 1,
+    "generateValues": { "type": "flow", "size": 32, "seed": 173 },
+    "params": { "style": "xy", "strength": [0.5, 0.5], "reach": 0.3, "axes": [0, 1], "shots": null, "max_qubits": 20 },
+    "raw": "flow-frame",
+    "bake": { "type": "effect-frame", "name": "effect-flow", "index": 0, "fps": 10, "size": 48, "tint": "plasma" }
+  }
+]
+```
+
+`effect-frame` returns one tinted RGBA frame. Records with the same `bucket` and
+`key` merge by `index` into `{ fps, frames: [...] }`, so an animated effect is
+simply more jobs (or one GIF job with `all: true`); with `files` these land as
+`effects/effect-dust.000.png` and `effects/effect-flow.000.png`.
+
+**Audio bakes.** An impulse response with its descriptor and tap map:
+
+```jsonc
+{
+  "id": "cavern-ir",
+  "engine": "retrocausal-echo-v1",
+  "credits": 2,
+  "params": { "emit": "audio", "ir_seconds": 4, "sr": 22050, "output_format": "pcm_16", "lattice": "square", "width": 4, "height": 5, "decay": 0.85, "feedback": 0.5, "diffusion_ms": 200, "min_level": 0.03, "seed": 12345, "include_tap_map": true },
+  "raw": "cavern-ir",
+  "bake": { "type": "ir", "name": "cavern", "urlBase": "/audio/irs" }
+}
+```
+
+`ir` (alias `ir-descriptor`) copies the decoded WAV next to a descriptor record
+that carries `file` (relative to the output dir), `url`, `seconds`,
+`sampleRate`, `format` and the tap map. `audio-clip`, `audio-stitch` and
+`echo-map` follow the same pattern — see [Bakers](#bakers) for every option.
+
+**Chaining outputs.** Engines that return a reusable artifact — a `model`, a
+`state` trajectory, an impulse response — expose an `output_asset_id`, and a
+later job can consume it with `inputFrom` instead of paying for the source job
+again:
+
+```jsonc
+{
+  "id": "gen",
+  "engine": "qrc-gen-v2",
+  "inputFrom": { "model": { "job": "train", "slot": "model" } },
+  "bake": { "type": "motif", "name": "generated" }
+}
+```
+
+`inputFrom` resolves from this run's captured asset id, then the referenced
+job's persisted `assetIds` (written back to JSON configs), then a re-upload of
+that job's archived raw output. Captured ids also appear in bundle provenance
+under `<job>.outputs`.
+
+## CLI
 
 ```
 mothbake <command> [options]
 
 Commands:
-  catalog     List the engines the API exposes and their credit cost
-  validate    Validate the config and report every problem
-  sources     Generate procedural source art (PNG/MIDI) locally
-  run         Resolve jobs, bake records, and run the emitters
-  repair      Rebuild local records from raw outputs, without the API
+  catalog            List the engines the API exposes and their credit cost
+  validate           Validate the config and report every problem
+  sources            Generate procedural source art (PNG/WAV/MIDI) locally
+  run                Resolve jobs, bake records, and run the emitters
+  repair             Rebuild local records from raw outputs, without the API
 
 Options:
   -c, --config <file>  Config file (default: mothbake.config.mjs / .js / mothbake.json)
@@ -178,15 +294,16 @@ Options:
       --dry            Print what would run without touching the API or writing files
       --strict         Stop at the first failed job instead of continuing
       --base <url>     Override the API base URL
-  -h, --help           Show help
+  -h, --help           Show this help
   -v, --version        Show the version
 ```
 
-`run` exits non-zero if any job fails. `validate` exits non-zero if the config
-has errors (warnings are printed but do not fail the run). `repair` exits
-non-zero if a selected local job has no raw archive or cannot be rebuilt.
-
-### Environment
+| Command | Exits non-zero when… |
+| --- | --- |
+| `run` | any job fails |
+| `validate` | the config has errors (warnings are printed but do not fail the run) |
+| `repair` | a selected local job has no raw archive or cannot be rebuilt |
+| `catalog` | `MOTH_API_KEY` is not set |
 
 | Variable | Meaning |
 | --- | --- |
@@ -204,15 +321,15 @@ non-zero if a selected local job has no raw archive or cannot be rebuilt.
 4. **Bake** — run the job's baker over the raw outputs and inline result to
    produce a portable record.
 5. **Emit** — hand all records to the configured emitters. Every artifact is
-   written atomically and aggregates are validated as exact JSON first. With
-   `merge: true` an aggregate emitter overlays this run's records on its
-   previous artifact, so a partial run never drops published data.
+   written atomically and aggregates are validated as exact JSON first; with
+   `merge: true` an aggregate overlays this run's records on its previous
+   artifact, so a partial run never drops published data.
 
 A failed job is reported and the remaining jobs still run; the command exits 1
 at the end. Pass `--strict` (or `strict: true` to `runConfig`) to stop at the
 first failure instead. Successful live submissions record their `jobId` back
 into a JSON config, so re-running downloads the existing result instead of
-paying for another run. Add `--force` to submit fresh jobs anyway.
+paying for another run; add `--force` to submit fresh jobs anyway.
 
 A cached `jobId` is only reused when the API confirms that job is `completed`.
 If it is failed, cancelled, still running, unknown, or its status cannot be
@@ -243,54 +360,47 @@ emitters and a scoped repair keeps every record outside the scope too.
 
 ## Configuration
 
-A config is a JSON file or an ES module. Default filenames, in priority order:
+A config is a JSON file or an ES module (`mothbake.config.mjs` / `.js`) whose
+default export is the config object. Default filenames, in priority order:
 `mothbake.config.mjs`, `mothbake.config.js`, `mothbake.json` (override with
 `--config`).
 
 ```jsonc
 {
-  "version": 1,                     // optional; stamped into bundles
-  "generator": "mothbake",          // optional; stamped into bundles
-  "baseUrl": "https://api.mothquantum.com", // optional; env/flags win
+  "version": 1,                              // optional; stamped into bundles
+  "generator": "mothbake",                   // optional; stamped into bundles
+  "baseUrl": "https://api.mothquantum.com",  // optional; env/flags win
   "jobs": [ /* required */ ],
-  "sources": { /* optional; for `mothbake sources` */ },
-  "emitter": { "type": "files" },   // optional; default { type: "files" }
+  "sources": { /* optional; used by `mothbake sources` */ },
+  "emitter": { "type": "files" },            // optional; default { "type": "files" }
   "emitters": [ /* optional; use instead of emitter for several */ ],
-  "writeBack": true                 // optional; record jobIds into JSON configs
+  "bakers": { /* module config only: custom bakers */ },
+  "generators": { /* module config only: custom value generators */ },
+  "writeBack": true,                         // optional; record jobIds into JSON configs
+  "comment": "Bake manifest"                 // optional; ignored, for readers
 }
 ```
 
 Relative paths in `inputs` and `recorded` are resolved against the config file's
-directory. `sources.dir` is too; `--out` is resolved against the working
+directory, as is `sources.dir`; `--out` is resolved against the working
 directory.
 
 ### Jobs
 
-```jsonc
-{
-  "id": "rock-tile",              // required, unique
-  "engine": "blur-v1",            // required; the API engine id
-  "enabled": true,                // optional; false skips the job
-  "jobId": "…",                   // optional; cached result, reused if completed
-  "credits": 1,                   // optional metadata for provenance
-  "inputs": { "image": "sources/rock.png" }, // optional; slot -> local file
-  "params": { "strength": 0.32 }, // optional; passed to the engine
-  "generateValues": { "type": "height", "size": 64, "seed": 11 }, // optional
-  "raw": "rock-tile",             // optional; raw output dir name (default id)
-  "bake": {                       // optional; omit to only archive the raw output
-    "type": "texture-tile",       // required baker type
-    "name": "rock",               // record key (default: the job id)
-    "bucket": "textures",         // record bucket (default: the baker's default)
-    "size": 64                    // baker-specific options
-  },
-  "recorded": {                   // optional; run fully offline from files
-    "outputs": { "result": "../fixtures/tile.png" },
-    "result": "../fixtures/grid.json"   // or an inline JSON value
-  }
-}
-```
-
-`input` is accepted as an alias of `inputs` (with a warning if both appear).
+| Field | Meaning |
+| --- | --- |
+| `id` | Required, unique. Names the job in plans, failures and provenance. |
+| `engine` | Required API engine id. Nothing is hardcoded per engine. |
+| `params` | Engine parameters, passed through as-is. |
+| `inputs` | `{ slot: local path }` files to upload. `input` is accepted as an alias; if both appear, `inputs` wins with a warning. |
+| `inputFrom` | `{ slot: { job, slot } }` or the `"job/slot"` shorthand; reuses an earlier job's output asset (see [How the API is used](#how-the-api-is-used)). |
+| `generateValues` | Local grid spec injected as `params.values` (see [Value generators](#value-generators)). |
+| `bake` | Baker and its options (see [Bakers](#bakers)); omit it to only archive the raw output. |
+| `recorded` | Offline substitute for the API call (see [Recorded results](#recorded-results)). |
+| `raw` | Raw-output directory name under `<out>/raw/` (default: the job `id`). |
+| `enabled` | `false` skips the job. |
+| `jobId` | Cached job id; reused only while the API reports it `completed`. |
+| `credits`, `mode`, `assetIds`, `comment` | Provenance and metadata: `credits` and `mode` are passed through, `assetIds` is the persisted `inputFrom` state written back after a run, `comment` is ignored. |
 
 ### Recorded results
 
@@ -299,7 +409,16 @@ local files, and `result` is the inline JSON result (a file path or an inline
 value). This is how the test suite and the examples run without a key, and how
 you can commit known-good results and re-bake them deterministically.
 
-### Sources and value generators
+```jsonc
+{
+  "recorded": {
+    "outputs": { "result": "../fixtures/tile.png" },
+    "result": "../fixtures/grid.json"   // or an inline JSON value
+  }
+}
+```
+
+### Sources
 
 `sources` configures the procedural source-art generator used by
 `mothbake sources` (see [examples/sources.mjs](examples/sources.mjs)):
@@ -335,10 +454,15 @@ pattern-specific `panels`, `ribs`, `cells`, `cloudFreq`, `starDensity`.
 `sampleFormat`, `fadeSeconds` and kind-specific knobs. `sources.chunks` splits
 one of those seeds into fixed-length WAV chunks and ZIPs them (`makeChunkZip`)
 with the dependency-free `zip()`, for engines that take a chunk vocabulary.
-`mothbake sources` writes only the audio/chunk files a job actually references.
+`mothbake sources` writes only the audio/chunk files a job actually references;
+the filter is the set of `inputs` basenames across all jobs (patterns, audio
+seeds, chunk archives, plus `motif.mid`).
+
+### Value generators
 
 `generateValues` synthesizes the grid some engines consume without shipping one
-in the config. Built-ins:
+in the config. The grid is injected as `params.values` at resolve time, so it
+works identically for live and recorded runs. Built-ins:
 
 | `generateValues.type` | Produces | Options |
 | --- | --- | --- |
@@ -352,22 +476,35 @@ in the config. Built-ins:
 | `rise` | motes rising through a soft heal column | `size`, `seed`, `frame` |
 | `shield` | expanding hexagonal bubble shell with seams | `size`, `seed`, `frame` |
 | `snow` | drifting flakes, seamless across frames | `size`, `seed`, `frame` |
-| `dust` | soft drifting dust/damp patches | `size` (64), `seed` (149) |
-| `flow` | directional wear/flow streaks along +x | `size` (64), `seed` (173) |
+| `dust` | soft drifting dust/damp patches | `size` (default 64), `seed` (default 149) |
+| `flow` | directional wear/flow streaks along +x | `size` (default 64), `seed` (default 173) |
 
 Every generator is pure and deterministic, returns a square `size`×`size` grid
-of values in `[0, 1]`, and for the animated families accepts a `frame` index.
-`height` also accepts `kind` (`noise` | `ridge` | `cells`) and the variety
-knobs `freq` (base frequency, `cells` default 4), `octaves` (default 5),
-`angle` (rotate the sampling lattice) and `anisotropy` (stretch along the
-rotated v axis, `>= 1`); with no spec the `noise`/`ridge` output is
-byte-identical to the pre-knob formula, while `cells` seeds its lattice phases
-so two cell jobs no longer share one lattice. The effect families use a fixed
-per-type `seed` default when one is not given.
+of values in `[0, 1]`, defaults to 32 px unless noted, and for the animated
+families accepts a `frame` index (with a fixed per-type `seed` default).
 
-Only `sources` writes files the jobs actually reference; the filter is the set
-of `inputs` basenames across all jobs (patterns, audio seeds, chunk archives,
-plus `motif.mid`).
+`height` is the one with variety knobs:
+
+- `kind` — `noise` (default), `ridge` (folded into ridges: 1 − |2h − 1|) or
+  `cells` (a seeded sine lattice).
+- `freq` — base tiling frequency (default 8; 4 for `cells`). Higher is finer.
+- `octaves` — fBm octaves (default 5).
+- `angle` — rotates the sampling lattice before sampling, turning the relief
+  into directional streaks. Multiples of π/2 keep the exact edge wrap; other
+  angles trade exact edge continuity for direction.
+- `anisotropy` — stretches along the rotated v axis (`>= 1`). With `angle: 0`,
+  an integer value makes the repeating v bands line up exactly with the texture
+  edge.
+- With no options the `noise`/`ridge` output is byte-identical to the
+  pre-knob formula. `cells` derives its lattice phases from the seed, so two
+  cell jobs no longer render the same lattice.
+
+`dust` and `flow` are field masks rather than shapes: `dust` gates a
+low-frequency wrapping field into soft accumulations, and `flow` shapes
+anisotropic wrapping noise into lanes that run along +x.
+
+Custom generators can be added from a module config:
+`generators: { myGrid: (spec) => grid }`.
 
 ## Decoders
 
@@ -418,9 +555,6 @@ Notes:
 - `effect-frame` records with the same `bucket` and `key` merge by `index`; the
   last `fps` wins and gaps are removed. The key falls back to `bake.effect` when
   `bake.name` is absent, so an effect can be named independently of the record.
-- `ir.file` is relative to the output dir. `url` is only populated when the bake
-  config sets `url` (with `{raw}`, `{slot}`, `{file}` placeholders) or `urlBase`
-  (e.g. `"/audio/ir"` → `/audio/ir/<raw>/result.wav`).
 - Grid-based bakers accept the inline result, a `{ result: … }` response, or a
   `{ output: … }` value, so the same config works for live and recorded runs.
 - `sprite-sheet` packs the composited GIF frames left-to-right, wrapping to a
@@ -429,6 +563,9 @@ Notes:
   a new rectangle: with `dedupe` (default true) the duplicate keeps its own
   `delay` and reuses the previous rectangle, so playback timing is unchanged;
   set `dedupe: false` to give every frame its own rectangle.
+- `ir.file` is relative to the output dir. `url` is only populated when the bake
+  config sets `url` (with `{raw}`, `{slot}`, `{file}` placeholders) or `urlBase`
+  (e.g. `"/audio/ir"` → `/audio/ir/<raw>/result.wav`).
 - `audio-clip` trims leading/trailing silence below `threshold` (default 0.001)
   and restores `pad` seconds (default 0) on each side; `trimStart`/`trimEnd`
   (seconds) override auto-detection and `trim: false` disables it. The clip is
@@ -450,7 +587,7 @@ Notes:
   filter) and `maxSeconds` trims to keep beds small. `meta` is copied into the
   record verbatim, so routing hints (`bus`, `kind`, `tags`) are baked rather
   than hard-coded.
-- `audio-stitch` concatenates ordered WAV slots (`slots`/`order`, entries are a
+- `audio-stitch` concatenates ordered WAV slots (`slots`/`order`; entries are a
   slot name or `{ slot, gain }`); `gains` supplies a parallel gain array and
   `crossfadeMs` equal-power joins each pair. Output is an `audio-clip`-shaped
   record, so `files` and `audio-pack` already understand it.
@@ -479,7 +616,7 @@ An emitter is `emit(records, ctx) => filesWritten`:
  */
 ```
 
-Built-ins:
+With no `emitter`/`emitters`, a single `files` emitter runs. Built-ins:
 
 | `type` | Writes | Options |
 | --- | --- | --- |
@@ -488,6 +625,8 @@ Built-ins:
 | `esm` | a generated module: `export const <name> = …; export default <name>;` | `file`, `export`, `defaultExport`, `header`, `provenance`, `shape`, `merge` |
 | `atlas` | `<bucket>/<key>.png` for each sprite-sheet record plus a `<bucket>/<key>.json` sidecar with the animation metadata; deterministic and idempotent | `dir`, `sidecar`, `pretty` |
 | `audio-pack` | a self-contained audio bundle: `<bucket>/<key>.wav` for `audio-clip`/`audio-stitch` (decoded or copied) and `ir`, `<bucket>/<key>.json` sidecars for `echo-map`/`ir`, and `manifest.json` (`{ version, generator, provenance, clips, spaces, irs }`) where each clip carries `url`, `seconds`, `sampleRate`, `channels`, `loopStart`, `loopEnd` and `gain` | `dir`, `manifest` (filename or `false`), `pretty`, `sidecar`, `merge` |
+
+One emitter:
 
 ```jsonc
 {
@@ -505,6 +644,16 @@ or several at once:
     { "type": "esm", "export": "ASSETS", "provenance": false }
   ]
 }
+```
+
+The `atlas` emitter writes `sprites/walk.png` plus `sprites/walk.json`; the
+`audio-pack` emitter writes a self-contained bundle, e.g. under the example
+manifest's `"dir": "pack"`:
+
+```
+pack/audio/bed-ritual.wav   pack/audio/bed-stitched.wav
+pack/irs/cavern.wav         pack/irs/cavern.json
+pack/spaces/arena.json      pack/manifest.json
 ```
 
 ### Merge-safe publication
@@ -538,7 +687,7 @@ change. Keys this run did not write keep their previous values, and frame
 records merge by index, so a partial effect run cannot shift a later frame onto
 index 0 (a frame index beyond the previous tail stays an explicit `null`
 placeholder). `files` merges its `index.json` by file path (`file` is the
-unique key) and unions provenance; `audio-pack` merges `clips`/`spaces`/`irs`
+unique key) and unions provenance; `audio-pack` merges its `clips`/`spaces`/`irs`
 and provenance in its manifest. To read its previous data the `esm` emitter
 imports its own previous module (cache-busted) and takes the configured export
 or the default — it is code this pipeline generated on an earlier run.
@@ -551,118 +700,11 @@ fails, the previous artifact is left byte-identical. `merge: true` against a
 missing artifact behaves exactly like a fresh write; against a corrupt one it
 fails loudly rather than overwrite it.
 
-### Animated images and audio
-
-```jsonc
-{
-  "jobs": [
-    {
-      "id": "walk-sheet",
-      "engine": "qrc-image-v1",
-      "bake": { "type": "sprite-sheet", "name": "walk", "maxWidth": 256, "powerOfTwo": true },
-      "recorded": { "outputs": { "result": "../test/fixtures/anim.gif" } }
-    },
-    {
-      "id": "sfx-clip",
-      "engine": "qrc-audio-v1",
-      "bake": {
-        "type": "audio-clip",
-        "name": "footstep",
-        "threshold": 0.001,
-        "sampleFormat": "pcm16",
-        "loopStart": 0,
-        "loopEnd": 0.02
-      },
-      "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
-    },
-    {
-      "id": "bed-clip",
-      "engine": "qrc-audio-v1",
-      "bake": {
-        "type": "audio-clip",
-        "name": "bed-ritual",
-        "embed": false,                 // emit a file descriptor, not base64
-        "urlBase": "/moth/files",
-        "detectLoop": true,             // find a seamless loop seam
-        "targetSampleRate": 22050,
-        "meta": { "kind": "bed", "bus": "ambience" }
-      },
-      "recorded": { "outputs": { "result": "../test/fixtures/clip-padded.wav" } }
-    },
-    {
-      "id": "stitch-clip",
-      "engine": "qrc-audio-v1",
-      "bake": {
-        "type": "audio-stitch",
-        "name": "bed-stitched",
-        "slots": ["a", { "slot": "b", "gain": 0.8 }],
-        "crossfadeMs": 5
-      },
-      "recorded": {
-        "outputs": {
-          "a": "../test/fixtures/clip-pcm16.wav",
-          "b": "../test/fixtures/clip-padded.wav"
-        }
-      }
-    },
-    {
-      "id": "echo-arena",
-      "engine": "otoc-echo-v1",
-      "bake": { "type": "echo-map", "name": "arena", "urlBase": "/audio/spaces", "maxTaps": 128 },
-      "recorded": { "result": "../test/fixtures/echo-trajectory.json" }
-    }
-  ],
-  "emitters": [{ "type": "atlas" }, { "type": "audio-pack", "dir": "audio" }]
-}
-```
-
-The `atlas` emitter writes `sprites/walk.png` plus `sprites/walk.json`
-(`{ width, height, sheet, frames, loops, fps }`). The `audio-pack` emitter
-writes a self-contained bundle plus `manifest.json`:
-
-```
-audio/audio/bed-ritual.wav   audio/audio/bed-stitched.wav
-audio/spaces/arena.json      audio/manifest.json
-```
-
-The `files` emitter is still the default when no `emitter` is configured; it
-writes the embedded clips as `<bucket>/<key>.wav` and structured records as
-JSON, and copies an `ir`/`audio-clip` file next to its descriptor.
-
-### Reusing engine outputs (asset-id chaining)
-
-Some engines return a reusable artifact — a trained `model`, a `state`
-trajectory, an impulse response — that a later job can consume. The runner
-captures each output's `output_asset_id` into the job's saved state and, on a
-JSON config, writes it back as `assetIds`, so a later run does not have to pay
-for the source job again:
-
-```jsonc
-{
-  "jobs": [
-    { "id": "train", "engine": "qrc-train-v2", "bake": { "type": "seed", "name": "train-seed" } },
-    {
-      "id": "gen",
-      "engine": "qrc-gen-v2",
-      "inputFrom": { "model": { "job": "train", "slot": "model" } },
-      "bake": { "type": "motif", "name": "generated" }
-    }
-  ]
-}
-```
-
-`inputFrom` maps an input slot to `{ job, slot }` (or the `"job/slot"`
-shorthand; `slot` defaults to the input's own name). Resolution order is: this
-run's captured asset id, then the referenced job's persisted `assetIds`, then a
-re-upload of that job's archived raw output, then an error. An explicit
-`inputFrom` wins over an `inputs` file for the same slot. The captured ids also
-appear in the bundle provenance under `<job>.outputs`.
-
 ## Extend it
 
-The pipeline is four contracts — **jobs**, **results**, **records**, **emitters**
-— and every step between them is a pure function, so the whole thing tests
-offline. There are three usual extension points:
+The pipeline is four contracts — **jobs**, **results**, **records**,
+**emitters** — and every step between them is a pure function, so the whole
+thing tests offline. Three usual extension points:
 
 - **A custom baker** turns any result into a record of your own shape:
   `bakers: { 'my-baker': (job, ctx) => ({ bucket, key, value }) }`.
@@ -700,20 +742,15 @@ The ESM emitter is the usual way to ship a game's baked data: a bucket-shaped
 aggregate with a provenance table is one valid config, and a flat record list
 (`shape: "records"`) is another.
 
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) documents the pipeline stages,
-the module map, the decoder coverage and the design decisions behind them.
-[docs/SYNC.md](docs/SYNC.md) records what this tool shares with its upstream
-pipeline and the rule for keeping the two in step.
-
 ## Examples
 
-[`examples/manifest.json`](examples/manifest.json) is a runnable config with
-texture, sky, three normal maps (including the `freq`/`octaves` ridge and
-`angle`/`anisotropy` brushed examples), eleven effect frames (one per
-generator), LUT, motif, two impulse-response jobs, sprite-sheet jobs, embedded
-and file-mode `audio-clip` jobs, an `audio-stitch` bed, an `echo-map`, generated
-audio seeds/chunks and the `audio-pack` emitter. Every job is recorded, so it
-works offline with no key:
+[`examples/manifest.json`](examples/manifest.json) is a runnable config with a
+texture, a sky, three normal maps (default noise, ridged strata, and an
+angled/anisotropic brushed field), an effect frame per generator (radial,
+portal, spark, bloom, vortex, contract, rise, shield, snow, dust and flow), a
+LUT, a motif, two impulse responses, sprite-sheet and audio jobs, an
+`echo-map`, generated audio seeds/chunks and the `audio-pack` emitter. Every
+job is recorded, so it works offline with no key:
 
 ```bash
 node bin/mothbake.mjs validate --config examples/manifest.json
@@ -723,10 +760,21 @@ node bin/mothbake.mjs sources --config examples/manifest.json
 
 The recorded fixtures live in [`test/fixtures/`](test/fixtures) (small, trimmed
 engine results kept for tests and examples). [`examples/sources.mjs`](examples/sources.mjs)
-shows the source-art generator directly.
+shows the source-art generator directly, and
 [`examples/publish.json`](examples/publish.json) is a two-job config whose
 aggregate emitters set `merge: true`; re-running it with `--only` shows a
 partial run keeping the previously published records.
+
+## Documentation map
+
+| Document | Covers |
+| --- | --- |
+| This README | Install, quick start, API usage, CLI, configuration, generators, bakers and emitters. |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Pipeline stages, module map, design decisions and the test layout. |
+| [docs/SYNC.md](docs/SYNC.md) | What this repository shares with the private upstream pipeline, and the rule for keeping the two in step. |
+| [examples/](examples) | Runnable manifests, offline configs and the source-art script. |
+| [test/](test) | Offline `node --test` suite and the recorded fixtures it runs against. |
+| [scripts/gallery.py](scripts/gallery.py) | Regenerates the gallery images from recorded bakes. |
 
 ## Security
 
@@ -745,12 +793,11 @@ The test suite makes no external network calls. The one HTTP test runs against a
 local mock that serves the recorded fixtures; everything else is pure functions
 and spawned CLI processes.
 
-The README gallery is generated from recorded bakes with Python (Pillow +
-numpy); see `python3 scripts/gallery.py --help` for the inputs it expects.
-
-The animated-GIF and WAV fixtures used by the media tests were generated once
-with the system `ffmpeg` and committed, so the suite stays offline; regenerate
-them with `scripts/make-fixtures.sh` if `ffmpeg` is available.
+The gallery images are generated from recorded bakes with Python (Pillow +
+numpy); see `python3 scripts/gallery.py --help` for the inputs it expects. The
+animated-GIF and WAV fixtures used by the media tests were generated once with
+the system `ffmpeg` and committed, so the suite stays offline; regenerate them
+with `scripts/make-fixtures.sh` if `ffmpeg` is available.
 
 ## License
 
