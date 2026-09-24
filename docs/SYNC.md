@@ -140,8 +140,8 @@ them and to the rights of any source material supplied.
 
 ## Sync log
 
-- **2026-09-24** — Rate-limit-safe API usage. Ported the upstream
-  `scripts/moth-bake.mjs` request queue: every API call now goes through one
+- **2026-09-24** — Rate-limit-safe API usage. Ported the upstream pipeline's
+  request queue: every API call now goes through one
   concurrency-1 gate spaced by `MOTH_MIN_INTERVAL_MS` (default 300 ms), and
   failures retry within a bounded budget (`MOTH_MAX_RETRIES` default 5). A `429`
   honours `Retry-After` (seconds or an HTTP date, capped at two minutes);
