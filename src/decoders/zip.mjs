@@ -110,6 +110,9 @@ export function unzip(buf, options = {}) {
     const comp = buf.subarray(start, start + compSize);
     let data;
     if (method === 0) {
+      if (compSize !== uncompSize) {
+        throw new Error(`zip: ${name} stored size mismatch: compressed size ${compSize}, expected ${uncompSize}`);
+      }
       data = Buffer.from(comp);
     } else if (method === 8) {
       // The extra byte catches forged zero/undersized headers without permitting unbounded inflation.

@@ -28,8 +28,10 @@ replace that raw archive.
   source plates succeeded with engine output sizes as small as 16 or 64.
   Using 256×256 source plates is a tested recipe, **not** a universal minimum
   accepted input size. A first request with `mode: "simulator"` failed
-  ambiguously; omit an unsupported mode rather than guessing. Explicit
-  `mode: "aer"` is appropriate only for engines whose catalog supports it.
+  ambiguously; omit the platform `mode` override rather than guessing. The
+  reviewed successful echo request put `machine: "aer"` **inside `params`**
+  for engines supporting that parameter (`params.machine` in a mothbake
+  manifest), and omitted the separate top-level platform `mode` entirely.
 - An OTOC trajectory arrived in a typed inline result envelope with `.output`
   and provider provenance. Retain the whole raw envelope, extract the exact
   measured trajectory for a subsequent IR input, and hash both source and
@@ -74,3 +76,12 @@ unreviewed API errors with examples. In a shared dataset verify byte hashes
 and safe relative paths against an immutable root, and label provider outputs
 separately from your classical transformations. This synthetic example is
 redistributable; the observed integration artifacts are not included here.
+
+`createApi` now avoids putting signed **download** URLs or untrusted response
+text into its ordinary download error messages. This is not a complete error
+redaction layer: structured `ApiError.body` (and causes supplied by callers)
+can still contain raw server data, while poll progress/status messages are not
+sanitized. Treat those fields as untrusted/private; never log or publish them
+without separate review and redaction. The bounded download checks do not
+establish an allowlist for arbitrary output hosts or cover every presigned
+upload failure path.

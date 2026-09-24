@@ -71,6 +71,53 @@ test('downloads enforce exact limit, absent/deceptive lengths, content-type and 
   await assert.rejects(client(async () => { throw new Error(signed); }).downloadOutput(signed), /download: request failed/);
 });
 
+test('download stream failures do not expose presigned URL or credentials', async () => {
+  const signed = 'https://storage.test/output?signature=top-secret';
+  const response = {
+    ok: true,
+    status: 200,
+    headers: headers(),
+    body: new ReadableStream({
+      pull(controller) {
+        controller.error(new Error(`stream failed at ${signed} with bearer private-key`));
+      },
+    }, { highWaterMark: 0 }),
+  };
+  await assert.rejects(client(async () => response).downloadOutput(signed), (error) => {
+    assert.equal(error.message, 'download: body read failed');
+    assert.doesNotMatch(String(error), /top-secret|private-key|storage\.test|signature/);
+    return true;
+  });
+  await assert.rejects(client(async () => ({ ok: true, status: 200, headers: headers(), arrayBuffer: async () => {
+    throw new Error(signed);
+  } })).downloadOutput(signed), /download: body read failed/);
+});
+
+test('downloads cancel unread bodies for HTTP and content-type rejection', async () => {
+  for (const { status, contentType, declared, expected } of [
+    { status: 403, contentType: 'image/png', expected: /download -> 403/ },
+    { status: 200, contentType: 'text/plain', declared: 'image/png', expected: /content-type/ },
+  ]) {
+    let reads = 0;
+    let cancellations = 0;
+    const response = {
+      ok: status === 200,
+      status,
+      headers: headers({ 'content-type': contentType }),
+      body: new ReadableStream({
+        pull(controller) {
+          reads++;
+          controller.enqueue(Buffer.from('unwanted'));
+        },
+        cancel() { cancellations++; },
+      }, { highWaterMark: 0 }),
+    };
+    await assert.rejects(client(async () => response).downloadOutput('https://storage.test/file', { contentType: declared }), expected);
+    assert.equal(reads, 0, 'body was not read');
+    assert.equal(cancellations, 1, 'unread body was canceled');
+  }
+});
+
 test('errors omit untrusted URL and credentials; diagnostics are bounded', async () => {
   const secret = 'https://storage.test/file?signature=private-value';
   const response = streamed(Buffer.from(JSON.stringify({ detail: secret, extra: 'x'.repeat(1000) })), {}, 400);
@@ -101,7 +148,7 @@ test('mock fallback supports text/arrayBuffer without body and still checks size
   await assert.rejects(client(async () => ({ ...mock('{}'), body: {} })).request('/bad'), /not a readable stream/);
 });
 
-test('bearer is sent only to API base and not presigned upload or download', async () => {
+test('bearer is sent to API base but not presigned download', async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });

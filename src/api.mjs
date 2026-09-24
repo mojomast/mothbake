@@ -156,7 +156,7 @@ function safeDetail(value, key) {
 async function readLimited(response, limit, kind) {
   const length = response.headers?.get?.('content-length');
   if (length != null && /^\d+$/.test(String(length).trim()) && Number(length) > limit) {
-    await response.body?.cancel?.().catch(() => {});
+    try { await response.body?.cancel?.(); } catch { /* Preserve the size-limit error. */ }
     throw new ApiError(`${kind} exceeds ${limit} byte limit`);
   }
   const body = response.body;
@@ -177,7 +177,7 @@ async function readLimited(response, limit, kind) {
       }
       return Buffer.concat(chunks, size);
     } catch (error) {
-      await reader.cancel().catch(() => {});
+      try { await reader.cancel(); } catch { /* Preserve the original read error. */ }
       throw error;
     } finally {
       reader.releaseLock();
@@ -215,8 +215,8 @@ async function readLimited(response, limit, kind) {
  *   nowImpl?: () => number, randomImpl?: () => number,
  *   log?: Function, minIntervalMs?: number, maxRetries?: number,
  *   retryBaseMs?: number, retryCapMs?: number, retryAfterCapMs?: number,
-  *   pollIntervalMs?: number, pollMaxIntervalMs?: number,
-  *   maxApiResponseBytes?: number, maxDownloadBytes?: number,
+ *   pollIntervalMs?: number, pollMaxIntervalMs?: number,
+ *   maxApiResponseBytes?: number, maxDownloadBytes?: number,
  * }} [options]
  */
 export function createApi(options = {}) {
@@ -420,14 +420,24 @@ export function createApi(options = {}) {
     } catch {
       throw new Error('download: request failed');
     }
-    if (!response.ok) throw new Error(`download -> ${response.status}`);
+    if (!response.ok) {
+      try { await response.body?.cancel?.(); } catch { /* Ignore cancellation errors. */ }
+      throw new Error(`download -> ${response.status}`);
+    }
     const declared = normalizeContentType(downloadOptions.contentType);
     const actual = normalizeContentType(response.headers?.get?.('content-type'));
     if (declared && actual !== declared) {
       const safeType = (type) => /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type) ? type : '(none)';
+      try { await response.body?.cancel?.(); } catch { /* Ignore cancellation errors. */ }
       throw new Error(`download: content-type "${safeType(actual)}" does not match the declared "${safeType(declared)}"`);
     }
-    const buffer = await readLimited(response, maxDownloadBytes, 'download');
+    let buffer;
+    try {
+      buffer = await readLimited(response, maxDownloadBytes, 'download');
+    } catch (error) {
+      if (error instanceof ApiError && error.message === `download exceeds ${maxDownloadBytes} byte limit`) throw error;
+      throw new Error('download: body read failed');
+    }
     if (!buffer.length) throw new Error('download: empty body');
     return buffer;
   }

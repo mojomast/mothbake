@@ -53,11 +53,36 @@ test('stored and deflated entries check actual size and CRC', () => {
   const d = central(wrongSize);
   wrongSize.writeUInt32LE(6, d + 24);
   wrongSize.writeUInt32LE(6, 22);
-  assert.throws(() => unzip(wrongSize), /decoded to 5 bytes, expected 6/);
+  assert.throws(() => unzip(wrongSize), /stored size mismatch/);
   const wrongCrc = archive({ 'a.txt': 'hello' });
   wrongCrc.writeUInt32LE(0, 14);
   wrongCrc.writeUInt32LE(0, central(wrongCrc) + 16);
   assert.throws(() => unzip(wrongCrc), /CRC mismatch/);
+});
+
+test('stored size mismatch fails before copying the compressed payload', () => {
+  const payload = Buffer.alloc(4 * 1024 * 1024, 0x61);
+  const buf = archive({ 'a.txt': payload });
+  const c = central(buf);
+  buf.writeUInt32LE(0, c + 16); // CRC of the forged zero-length entry
+  buf.writeUInt32LE(0, c + 24);
+  buf.writeUInt32LE(0, 14);
+  buf.writeUInt32LE(0, 22);
+
+  const originalFrom = Buffer.from;
+  let copiedPayload = false;
+  Buffer.from = function (value, ...args) {
+    if (value instanceof Uint8Array && value.buffer === buf.buffer && value.byteLength === payload.length) {
+      copiedPayload = true;
+    }
+    return originalFrom.call(this, value, ...args);
+  };
+  try {
+    assert.throws(() => unzip(buf, { maxEntryUncompressedBytes: 0 }), /stored size mismatch/);
+    assert.equal(copiedPayload, false);
+  } finally {
+    Buffer.from = originalFrom;
+  }
 });
 
 test('data-descriptor-style local placeholders work; truncated deflate fails', () => {
