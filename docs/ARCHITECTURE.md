@@ -99,11 +99,10 @@ start one at a time and never faster than the interval. A `429` honours
 `Retry-After` (seconds or an HTTP date, capped at two minutes) or backs off
 exponentially with jitter (`MOTH_RETRY_BASE_MS` default 1000,
 `MOTH_RETRY_CAP_MS` default 30000, `MOTH_MAX_RETRIES` default 5), logging each
-wait as `rate limited, retrying in Ns`. GETs and non-submit POSTs retry `429`,
-  transient `5xx` and network failures; unsafe POSTs retry only a definite
-  `429` — after a
-network error or `5xx` it fails closed with a "may or may not have been created"
-message, because a retry could pay for a second job. Polling is adaptive:
+wait as `rate limited, retrying in Ns`. Safe GETs retry `429`, transient `5xx`
+and network failures. Unsafe job/asset POSTs retry only a definite `429`; an
+ambiguous network/5xx outcome fails closed because repeating it could duplicate
+work or pending assets. Polling is adaptive:
 `MOTH_POLL_INTERVAL_MS` (default 1500 ms), growing 1.5x while the status marker
 is unchanged up to `MOTH_POLL_MAX_INTERVAL_MS` (default 5000 ms), reset on any
 transition; the 15-minute timeout is unchanged.

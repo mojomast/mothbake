@@ -172,10 +172,10 @@ them and to the rights of any source material supplied.
   honours `Retry-After` (seconds or an HTTP date, capped at two minutes);
   otherwise the wait is exponential with jitter (`MOTH_RETRY_BASE_MS` default
   1000, `MOTH_RETRY_CAP_MS` default 30000), each wait logged as
-  `rate limited, retrying in Ns`. GETs and non-submit POSTs retry `429`,
-  transient `5xx` and transport failures; a job submit retries only `429` and
-  otherwise fails closed with a message saying the job may or may not have been
-  created, so an automatic retry can never pay twice. Job polling is adaptive:
+  `rate limited, retrying in Ns`. This initial revision retried non-submit asset
+  POSTs; the 2026-09-25 hardening now limits transient/network retries to safe
+  GETs and a definite `429`, treating ambiguous job and asset POST outcomes as
+  reconciliation gates. Job polling is adaptive:
   base `MOTH_POLL_INTERVAL_MS` (default 1500 ms), growing 1.5x while the status
   marker is unchanged up to `MOTH_POLL_MAX_INTERVAL_MS` (default 5000 ms), reset
   on any transition; the 15-minute timeout is unchanged. Added

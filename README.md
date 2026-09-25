@@ -394,12 +394,10 @@ a minimum spacing, so a batch of jobs cannot burst into a rate limit:
 A `429` (or a `503` with `Retry-After`) waits as the server asks — seconds or an
 HTTP date, capped at two minutes — otherwise the wait is exponential with
 jitter, capped at `MOTH_RETRY_CAP_MS`. Every wait is logged (`rate limited,
-retrying in 2s`). GETs and non-submit POSTs (asset operations) retry `429`,
-transient `5xx` and network failures; a job **submit** is retried only on `429`,
-because anything else may already have created a paid job. If a submit fails
-without a confirmed response, the run stops with a message saying the job may or
-may not have been created — check the job list and credit history before
-rerunning.
+retrying in 2s`). Safe GETs retry `429`, transient `5xx` and network failures.
+Unsafe POSTs (job submission and asset create/complete) retry only a definite
+`429`; other ambiguous outcomes stop for reconciliation rather than repeating a
+side effect.
 
 Job polling is adaptive: it starts at `MOTH_POLL_INTERVAL_MS`, grows the wait by
 1.5x while the status/progress marker does not change (up to
@@ -475,7 +473,7 @@ to stderr with exit 1. An unavailable optional backend is a successful
 
 | Variable | Meaning |
 | --- | --- |
-| `MOTH_API_KEY` | Bearer token. Required for `catalog`, and for `run` when any selected job is not recorded. Never written to disk. |
+| `MOTH_API_KEY` | Bearer token. Required for `catalog` and when a plan must contact Moth to resume/retrieve/submit. Recorded and verified-archive rebuilds need no key. Never written to disk. |
 | `MOTH_API_BASE` | API base URL. Default `https://api.mothquantum.com`. Overridden by `--base` and overrides `baseUrl` from the config. |
 | `MOTH_MIN_INTERVAL_MS` | Minimum spacing between API request starts. Default `300`. |
 | `MOTH_MAX_RETRIES` | Retries per request after `429`/transient failures. Default `5`. |
@@ -495,9 +493,8 @@ See [Rate limits and pacing](#rate-limits-and-pacing) for the retry rules.
 1. **Plan** — validate and topologically order dependencies, hash source bytes,
    classify recorded/archive/resume/submit work, calculate costs and freeze a
    fingerprint. `--only` includes required ancestors.
-2. **Resolve** — use a `recorded` fixture, reuse a cached `completed` `jobId`,
-   or submit a live job (uploading inputs, resolving `inputFrom` assets,
-   injecting generated values, polling to completion).
+2. **Resolve** — use a recorded fixture, verify/rebuild an archive, resume a
+   journaled job, or—only with exact approval—upload inputs and submit live.
 3. **Archive** — save raw outputs under `<out>/raw/<raw>/`, plus
    `inline-result.json` and a hash-verified `.mothbake-archive.json` manifest.
 4. **Bake** — run the job's baker over the raw outputs and inline result to

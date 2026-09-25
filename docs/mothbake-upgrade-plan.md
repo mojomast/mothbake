@@ -14,7 +14,8 @@ and in `mothbake-upgrade-validation.md` rather than in parallel audit reports.
 - The starting revision intentionally includes the already-reviewed
   `work/portfolio-learnings-2026-09-24` changes. The worktree was not reset to
   the older review baseline.
-- Baseline `npm test`: 219 passed, 0 failed on Node.js 22.17.0.
+- Baseline `npm test`: 219 passed, 0 failed; working-tree verification used
+  Node.js 22.23.1.
 - Runtime dependencies: none. Optional media and engine integrations must stay
   optional.
 - Live job submission is prohibited for this implementation. Development uses
