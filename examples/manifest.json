@@ -39,7 +39,7 @@
       "inputs": { "image": "sources/nebula.png" },
       "params": { "strength": 0.6, "style": "ry", "reach": 0.85, "size": 512, "downscale": true },
       "raw": "nebula-sky",
-      "bake": { "type": "sky", "name": "nebula", "width": 128, "height": 64 },
+      "bake": { "type": "sky", "name": "nebula", "width": 128, "height": 64, "sourceProjection": "equirectangular" },
       "recorded": { "outputs": { "result": "../test/fixtures/sky.png" } }
     },
     {

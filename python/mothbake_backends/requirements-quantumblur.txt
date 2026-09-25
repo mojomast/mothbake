@@ -1,0 +1,7 @@
+# Optional only. Nothing in this file is installed by npm or ordinary tests.
+quantumblur @ git+https://github.com/qiskit-community/QuantumBlur.git@cecdf5faf08e847c41f5b0aeea923e15803875e8
+numpy>=1.23,<3
+scipy>=1.9,<2
+Pillow>=9,<13
+qiskit>=1,<3
+qiskit-aer>=0.13,<1

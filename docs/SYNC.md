@@ -99,22 +99,29 @@ pipeline; "here" is `mothbake`.
 | Feature | Upstream | Here | Notes |
 | --- | --- | --- | --- |
 | Recorded fixtures (offline runs) | no | yes | Here-only; used by tests and examples. |
-| Cached `jobId` reuse and `--force` | yes | yes | Here writes ids back only when they change. A recorded job that is not `completed` (failed, cancelled, running, unknown, or unverifiable) is never auto-resubmitted: the run fails with a clear message and requires `--force`. |
-| Offline repair from raw outputs (`repair`) | yes (`LOCAL_BAKE_TYPES`: `ir`, `echo-map`) | yes (`LOCAL_BAKE_TYPES`: `ir`/`ir-descriptor`, `echo-map`, `audio-clip`, `audio-stitch`) | Here rebuilds the local records from `<out>/raw/<raw>/` and runs the emitters, with no API key and no credits. Includes the file-derived `audio-clip` (`embed: false`) so it is rebuildable beside its descriptor. |
-| Dry run without network or writes | yes | yes | Here also reports a per-job action plan. |
+| Durable job recovery and `--force` | partial | yes | Versioned journal persists intent and returned ids before polling. Queued work resumes; completed/archive work rebuilds. `submitting`/unknown outcomes and recipe conflicts require reconciliation. `--force` is fresh intent, never spending approval. |
+| Exact spending plan / local budget gate | no | yes | New Moth submissions require the exact frozen `--approve-spend` fingerprint; unknown cost is explicit. This is local admission control, not provider billing enforcement. |
+| Offline repair from raw outputs (`repair`) | partial | yes (all built-in bakers) | New archives bind generation, slots and hashes; legacy archives are unverified. Repair takes the same output lock and uses no API/key/credits. `bakes` lets one raw result feed several local transforms. |
+| Dry run without network or writes | yes | yes | `run --dry` is text; `plan` emits the complete structured action/spending plan. |
 | Stop at the first failure (`strict`) | yes | yes | Library option plus the `--strict` flag. |
-| `--only` selection | yes | yes | Here also accepts repeats and comma-separated ids, and validates them. |
-| `catalog`, `sources`, `run` commands | yes | yes | — |
+| `--only` selection | yes | yes | Accepts repeats/comma-separated ids, validates them and includes transitive `inputFrom` ancestors. |
+| `catalog`, `sources`, `run` commands | yes | yes | `catalog --snapshot` writes a sanitized dated contract for preflight validation. |
 | `validate` command and config schema checks | no | yes | Here-only. |
+| `plan`, `resume`, `rebuild`, `inspect`, `explore`, `approve`, `export`, `workbench` | no | yes | Here-only local workflow and structured review/approval surfaces. |
+| Optional local backends (`backends`, `local-blur`) | no | yes | Pinned QuantumBlur is explicit and cannot reach Atlas; Quantum Audio remains a deferred codec, not `qrc-audio-v1`. |
+| Read-only GC/reference report | no | yes | Hash/reference/disposition report only; `canDelete:false`, `--apply` refused, corrupt/incomplete state unknown. |
 | Custom bakers / generators / emitters from a module config | no | yes | Here-only extension points. |
 | Emitters (files / JSON / ESM) | partial | yes | Upstream writes one hard-coded module; here emitters are a registry. |
 | Emitter `atlas` (sprite-sheet PNG + JSON sidecar) | partial | yes | Deterministic and idempotent; composes with the other emitters. |
 | Emitter `audio-pack` (audio bundle + manifest) | partial | yes | Writes clips/IRs/spaces plus a deterministic `manifest.json`; composes with the other emitters. |
+| Emitter `audio-pack-versioned` | no | yes | Transactional complete-pack versions with content hashes and rollback; incomplete/merge publication is refused. |
+| Content-pinned candidates/approvals | no | yes | Candidate media and hashes are verified; rejected candidates cannot be approved; supersession retains history. |
+| Godot material export | no | yes | Separate API emits aligned textures, material, scene/project and hashes. Runtime import is only passed when an installed Godot probe succeeds. |
 | Atomic + exact-JSON validated publication | yes | yes | Emitters write through a same-directory temp file + rename. Aggregates are validated before the write: no NaN/Infinity, `undefined` keys, array holes, cycles or non-plain objects, and provenance for every job whose records the artifact carries. A rejected write leaves the previous artifact byte-identical. |
 | Merge-safe publication (opt-in `merge: true`) | yes | yes | Here merge is an emitter option, not a default: `json`, `esm`, `files` (its `index.json`) and `audio-pack` (its manifest) load their previous artifact and overlay this run's records. Keys a partial run did not write keep their previous values; frame records merge by index. Corrupt previous artifacts fail loudly instead of being replaced. |
 | Download validation (status, declared content type, empty body) | yes | yes | `res.ok` plus declared-vs-actual content-type (parameters/case ignored) and empty-body rejection. Raw archives are written atomically. |
-| Output-asset-id capture + `inputFrom` chaining | yes | yes | Captures `output_asset_id`, persists `job.assetIds`, and resolves a later job's input from the run, the config, or a re-upload. |
-| API client (engines, jobs, assets, polling) | yes | yes | Injectable `fetch`/`sleep` for offline tests, plus `nowImpl`/`randomImpl` for virtual-time tests. One paced request gate, credit-safe retries (a submit retries only on 429) and adaptive polling. |
+| Output-asset-id capture + `inputFrom` chaining | yes | yes | Graph-planned dependencies use this run's captured id or freshly verified archived bytes. Persisted mutable ids cannot satisfy a dirty edge. |
+| API client (engines, jobs, assets, polling) | yes | yes | Injectable/time-bounded client, paced safe GET retries, ambiguous unsafe POST handling, abort propagation, body limits, redirect credential boundary and output-asset URL refresh. |
 
 **2026-09-24 (here-only integration follow-up).** Added exact `raw-grid`
 records, corrected missing mode provenance to `null`, bounded API downloads
@@ -136,8 +143,8 @@ These are private-consumer concerns, so they stay upstream:
 - The upstream `repairModule`'s in-place patch of one generated module. Here
   records are data and emitters are a registry, so `mothbake repair` re-runs the
   configured emitters over the rebuilt local records instead of editing a single
-  module. It is scoped to `LOCAL_BAKE_TYPES` (the same subset upstream rebuilds);
-  run it with `--only` (or a config of those jobs) when you do not want the
+  module. It supports every built-in baker from a complete archive; run it with
+  `--only` (or a config of those jobs) when you do not want the
   aggregate emitters to contain only the repaired records.
 
 ## Output rights
@@ -147,6 +154,16 @@ baked assets remain subject to the terms of whichever upstream service produced
 them and to the rights of any source material supplied.
 
 ## Sync log
+
+- **2026-09-25** — Local-first workbench upgrade. Replaced mutable-manifest
+  execution state with a versioned journal/lock, layered recipe/raw/bake/export
+  identities, topological dependency planning, exact spending approval,
+  hash-verified archives and all-baker rebuilds. Added bounded variations,
+  candidate review/content-pinned approvals, transactional audio/material
+  packs, Godot export, contract snapshots, hardened network recovery, read-only
+  GC diagnostics, structural media validation and the explicit pinned
+  QuantumBlur backend. These are here-only product capabilities; they do not
+  change or claim equivalence with hosted Moth engines.
 
 - **2026-09-24** — Rate-limit-safe API usage. Ported the upstream pipeline's
   request queue: every API call now goes through one

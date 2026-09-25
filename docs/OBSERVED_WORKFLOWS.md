@@ -19,8 +19,10 @@ not 1. A Blur Core result seen in the integration contained nonnegative,
 max-rescaled output, not a probability distribution. If a consumer needs
 probabilities or display-scaled intensities, calculate and label that **local
 transformation** separately. The original JSON remains at
-`raw/<job>/result.json`; image bakers may apply display rescaling but never
-replace that raw archive.
+`raw/<job>/inline-result.json` in new archives (`result.json` is a legacy
+layout); image bakers may apply display rescaling but never replace that raw
+archive. `.mothbake-archive.json` binds the generation identity and exact blob
+hashes.
 
 ## Verify the returned artifact, not the requested shape
 
@@ -63,13 +65,17 @@ Manifest `credits` is a supplied **estimate**, not a confirmed bill. A missing
 mode is represented as `null` in new bundle provenance rather than an invented
 `"emu"`; an explicitly requested mode is still a request, not backend proof.
 Consumers of historical generated bundles should not treat their old default
-`"emu"` as observed execution evidence. Successful `jobId` reuse downloads
-results without a new submit. A network failure or 5xx around paid submission
-may have created a job: do **not** automatically retry it. Inspect job history
-and billing before explicitly choosing `--force`. For crash-proof, multi-process
-accounting, use your own durable pre-submit ledger and manual reconciliation;
-the manifest writeback occurs only after a confirmed response and is not a
-transactional billing journal. Do not infer free or charged runs from mode.
+`"emu"` as observed execution evidence.
+
+Current recovery order is: recorded fixture → matching hash-verified archive
+rebuild → journal resume/status check → new submission only from an explicitly
+approved frozen plan. The journal persists intent before POST and a returned
+job id before polling. A crash in `submitting`, or a request whose response is
+lost, becomes a reconciliation gate; inspect documented job history and billing
+without resubmitting. `--force` cannot clear that gate and does not bypass
+`--approve-spend <exact-plan-fingerprint>`. The journal/lock is single-host
+coordination, not a provider billing cap. Do not infer free or charged runs from
+mode.
 
 Do not redistribute private recordings, raw packs, signed URLs, credentials or
 unreviewed API errors with examples. In a shared dataset verify byte hashes
@@ -77,11 +83,9 @@ and safe relative paths against an immutable root, and label provider outputs
 separately from your classical transformations. This synthetic example is
 redistributable; the observed integration artifacts are not included here.
 
-`createApi` now avoids putting signed **download** URLs or untrusted response
-text into its ordinary download error messages. This is not a complete error
-redaction layer: structured `ApiError.body` (and causes supplied by callers)
-can still contain raw server data, while poll progress/status messages are not
-sanitized. Treat those fields as untrusted/private; never log or publish them
-without separate review and redaction. The bounded download checks do not
-establish an allowlist for arbitrary output hosts or cover every presigned
-upload failure path.
+`createApi` bounds response/download bodies and diagnostics, redacts credential
+and signed-URL-shaped details, rejects API redirects before bearer credentials
+can cross origins, and sends no bearer header to object storage. Treat all
+remote errors/progress as untrusted/private anyway; never publish them without
+review. Expired output URLs are refreshed through documented result/asset GETs,
+never by creating another generation.

@@ -9,7 +9,9 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../src/config.mjs';
+import { buildExecutionPlan } from '../src/execution-plan.mjs';
 import { runConfig } from '../src/runner.mjs';
+import { readRunJournal } from '../src/run-journal.mjs';
 import { fixture, makeTmpDir, readFixture, writeJson } from './helpers.mjs';
 
 function startMockApi(t, options = {}) {
@@ -154,6 +156,19 @@ const baseConfig = (dir) => ({
   ],
 });
 
+function approve(options) {
+  const plan = buildExecutionPlan({
+    config: options.config,
+    configDir: options.configDir,
+    outDir: options.outDir,
+    only: options.only,
+    force: options.force,
+    baseUrl: options.base,
+    journalSnapshot: readRunJournal(options.outDir),
+  });
+  return { ...options, approveSpend: plan.fingerprint };
+}
+
 test('a full online cycle submits, polls, downloads, bakes and emits', async (t) => {
   const dir = makeTmpDir(t, 'mock-run');
   fs.mkdirSync(path.join(dir, 'sources'), { recursive: true });
@@ -162,7 +177,7 @@ test('a full online cycle submits, polls, downloads, bakes and emits', async (t)
   const outDir = path.join(dir, 'out');
   const { base, state } = await startMockApi(t);
 
-  const result = await runConfig({
+  const result = await runConfig(approve({
     config: JSON.parse(fs.readFileSync(configFile, 'utf8')),
     configFile,
     configDir: dir,
@@ -171,7 +186,7 @@ test('a full online cycle submits, polls, downloads, bakes and emits', async (t)
     base,
     sleepImpl: async () => {},
     log: () => {},
-  });
+  }));
 
   assert.deepEqual(result.failures, []);
   assert.equal(result.records.length, 2);
@@ -194,7 +209,7 @@ test('a full online cycle submits, polls, downloads, bakes and emits', async (t)
 
   // Raw outputs are archived under out/raw/<job>/.
   assert.deepEqual(fs.readFileSync(path.join(outDir, 'raw', 'tile', 'result.png')), readFixture('tile.png'));
-  const rawResult = JSON.parse(fs.readFileSync(path.join(outDir, 'raw', 'grid', 'result.json'), 'utf8'));
+  const rawResult = JSON.parse(fs.readFileSync(path.join(outDir, 'raw', 'grid', 'inline-result.json'), 'utf8'));
   assert.deepEqual(rawResult, { output: [[0, 0.5], [1, 0.25]] });
 
   // Emitters wrote decoded PNGs plus the JSON and ESM bundles.
@@ -239,7 +254,7 @@ test('--force submits fresh jobs and a failing job is reported without stopping 
   const outDir = path.join(dir, 'out');
   const { base, state } = await startMockApi(t);
 
-  const forced = await runConfig({
+  const forced = await runConfig(approve({
     config: JSON.parse(fs.readFileSync(configFile, 'utf8')),
     configFile,
     configDir: dir,
@@ -249,7 +264,7 @@ test('--force submits fresh jobs and a failing job is reported without stopping 
     force: true,
     sleepImpl: async () => {},
     log: () => {},
-  });
+  }));
   assert.equal(state.submits.length, 3, 'all three jobs submitted');
   assert.equal(forced.failures.length, 1);
   assert.equal(forced.failures[0].id, 'boom');
@@ -257,7 +272,7 @@ test('--force submits fresh jobs and a failing job is reported without stopping 
   assert.equal(forced.records.length, 2, 'the healthy jobs still baked');
 });
 
-test('missing inputs and a missing key fail per job with actionable messages', async (t) => {
+test('planning rejects missing live inputs and execution reports recorded/missing-key errors', async (t) => {
   const dir = makeTmpDir(t, 'mock-errors');
   const config = {
     jobs: [
@@ -266,7 +281,7 @@ test('missing inputs and a missing key fail per job with actionable messages', a
       { id: 'no-input', engine: 'blur-v1', inputs: { image: 'sources/nope.png' }, bake: { type: 'texture-tile' } },
     ],
   };
-  const result = await runConfig({
+  await assert.rejects(() => runConfig({
     config,
     configDir: dir,
     outDir: path.join(dir, 'out'),
@@ -274,10 +289,15 @@ test('missing inputs and a missing key fail per job with actionable messages', a
     base: 'http://127.0.0.1:9',
     sleepImpl: async () => {},
     log: () => {},
+  }), /input "image" not found/);
+
+  const recorded = await runConfig({
+    config: { jobs: [config.jobs[0]] }, configDir: dir, outDir: path.join(dir, 'recorded'), log: () => {},
   });
-  assert.equal(result.failures.length, 3);
-  assert.match(result.failures[0].message, /recorded output "result" not found/);
-  const missingKey = await runConfig({
+  assert.equal(recorded.failures.length, 1);
+  assert.match(recorded.failures[0].message, /recorded output "result" not found/);
+
+  const missingKeyOptions = {
     config: { jobs: [{ id: 'no-key', engine: 'blur-v1', bake: { type: 'texture-tile' } }] },
     configDir: dir,
     outDir: path.join(dir, 'out2'),
@@ -285,9 +305,10 @@ test('missing inputs and a missing key fail per job with actionable messages', a
     base: 'http://127.0.0.1:9',
     sleepImpl: async () => {},
     log: () => {},
-  });
+  };
+  const missingKey = await runConfig(approve(missingKeyOptions));
   assert.equal(missingKey.failures.length, 1);
-  assert.match(missingKey.failures[0].message, /MOTH_API_KEY is required to run live job "no-key"/);
+  assert.match(missingKey.failures[0].message, /MOTH_API_KEY is required to submit live job "no-key"/);
 });
 
 test('inputFrom reuses output asset ids and falls back to re-upload', async (t) => {
@@ -331,7 +352,7 @@ test('inputFrom reuses output asset ids and falls back to re-upload', async (t) 
   const outDir = path.join(dir, 'out');
   const { base, state } = await startMockApi(t);
 
-  const result = await runConfig({
+  const result = await runConfig(approve({
     config: JSON.parse(fs.readFileSync(configFile, 'utf8')),
     configFile,
     configDir: dir,
@@ -340,7 +361,7 @@ test('inputFrom reuses output asset ids and falls back to re-upload', async (t) 
     base,
     sleepImpl: async () => {},
     log: () => {},
-  });
+  }));
 
   assert.deepEqual(result.failures, []);
   assert.equal(result.records.length, 3);
@@ -354,6 +375,20 @@ test('inputFrom reuses output asset ids and falls back to re-upload', async (t) 
   // Asset ids persist into the JSON config so a later run skips the re-upload.
   const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.deepEqual(saved.jobs[0].assetIds, { model: 'asset-state-1' });
+});
+
+test('downstream refuses stale persisted asset ids when its planned ancestor fails', async (t) => {
+  const dir = makeTmpDir(t, 'mock-stale-chain');
+  const outDir = path.join(dir, 'out');
+  const config = { jobs: [
+    { id: 'source', engine: 'qrc-train-v2', assetIds: { model: 'stale-asset' }, recorded: { outputs: { model: 'missing.json' } } },
+    { id: 'consumer', engine: 'qrc-gen-v2', credits: 1, inputFrom: { model: 'source/model' } },
+  ] };
+  const { base, state } = await startMockApi(t);
+  const result = await runConfig(approve({ config, configDir: dir, outDir, key: 'test-key', base, sleepImpl: async () => {}, log: () => {} }));
+  assert.equal(result.failures.length, 2);
+  assert.match(result.failures[1].message, /dependency source\/model did not complete/);
+  assert.equal(state.submits.length, 0, 'stale persisted asset ids must not reach a downstream submit');
 });
 
 // A recorded jobId must only be reused when the API confirms `completed`.
@@ -380,8 +415,8 @@ test('a recorded failed job is not auto-resubmitted and demands --force', async 
   const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, sleepImpl: async () => {}, log: () => {} });
 
   assert.equal(result.failures.length, 1);
-  assert.match(result.failures[0].message, /recorded job "retry" \(job-old\) is failed, not completed/);
-  assert.match(result.failures[0].message, /--force/);
+  assert.match(result.failures[0].message, /recorded job "retry" \(job-old\) is failed/);
+  assert.match(result.failures[0].message, /refusing to submit a replacement/);
   assert.equal(state.submits.length, 0, 'a failed recorded job must not be auto-resubmitted');
 });
 
@@ -393,8 +428,8 @@ test('a recorded job with an unknown status is not auto-resubmitted', async (t) 
   const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, sleepImpl: async () => {}, log: () => {} });
 
   assert.equal(result.failures.length, 1);
-  assert.match(result.failures[0].message, /recorded job "maybe" \(job-old\) is unknown, not completed/);
-  assert.match(result.failures[0].message, /--force/);
+  assert.match(result.failures[0].message, /recorded job "maybe" \(job-old\) returned an unknown status/);
+  assert.match(result.failures[0].message, /refusing to submit or poll blindly/);
   assert.equal(state.submits.length, 0, 'an unknown-status recorded job must not be auto-resubmitted');
 });
 
@@ -407,7 +442,7 @@ test('a recorded job whose status cannot be verified is not auto-resubmitted', a
 
   assert.equal(result.failures.length, 1);
   assert.match(result.failures[0].message, /recorded job "unverified" \(job-old\) could not be verified/);
-  assert.match(result.failures[0].message, /--force/);
+  assert.match(result.failures[0].message, /resume after status access is restored/);
   assert.equal(state.submits.length, 0, 'an unverifiable recorded job must not be auto-resubmitted');
 });
 
@@ -427,7 +462,8 @@ test('--force resubmits a recorded failed job', async (t) => {
   };
   const { base, state } = await startMockApi(t, { statuses: { 'job-old': { status: 'failed', error: { message: 'engine exploded' } } } });
 
-  const result = await runConfig({ config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, force: true, sleepImpl: async () => {}, log: () => {} });
+  const options = { config, configDir: dir, outDir: path.join(dir, 'out'), key: 'test-key', base, force: true, sleepImpl: async () => {}, log: () => {} };
+  const result = await runConfig(approve(options));
 
   assert.deepEqual(result.failures, []);
   assert.equal(state.submits.length, 1, '--force submits a fresh job');

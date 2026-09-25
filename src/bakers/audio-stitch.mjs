@@ -17,6 +17,7 @@
 
 import { decodeWav, mixdownChannels } from '../decoders/wav.mjs';
 import { requireFile } from './util.mjs';
+import { analyzeAudioQuality } from '../audio-quality.mjs';
 import {
   applyGain,
   crossfadeAtSeam,
@@ -25,7 +26,7 @@ import {
   limitFrames,
   optionalNumber,
   peakOf,
-  resampleLinear,
+  resampleChannels,
   round,
   scaleChannels,
 } from './audio.mjs';
@@ -95,8 +96,12 @@ export function bake(job, ctx) {
   });
 
   const sampleRate = targetRate ?? decodedClips[0].sampleRate;
+  let resampled = false;
   for (const clip of decodedClips) {
-    if (clip.sampleRate !== sampleRate) clip.channels = resampleLinear(clip.channels, clip.sampleRate, sampleRate);
+    if (clip.sampleRate !== sampleRate) {
+      clip.channels = resampleChannels(clip.channels, clip.sampleRate, sampleRate, options.resampleQuality ?? 'preview');
+      resampled = true;
+    }
     clip.sampleRate = sampleRate;
   }
   const channelCount = decodedClips[0].channels.length;
@@ -172,7 +177,7 @@ export function bake(job, ctx) {
     crossfade: null,
     options,
     ctx,
-    slot: null,
+    slot: 'result',
     type,
   });
   value.source = {
@@ -188,6 +193,15 @@ export function bake(job, ctx) {
       frames: clip.channels[0].length,
     })),
   };
+  if (resampled || targetRate !== null) {
+    value.resampleQuality = options.resampleQuality ?? 'preview';
+  }
+  value.qualityReport = analyzeAudioQuality(channels, sampleRate, {
+    category: options.category ?? options.meta?.category ?? 'generic',
+    loopStart,
+    loopEnd,
+    normalized: options.normalize !== false,
+  });
 
   return {
     bucket: options.bucket ?? defaultBucket,

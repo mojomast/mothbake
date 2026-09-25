@@ -9,6 +9,9 @@ export const defaultBucket = 'sky';
 
 export function bake(job, ctx) {
   const options = ctx.bake ?? {};
+  if (options.sourceProjection !== 'equirectangular') {
+    throw new Error(`${type}.sourceProjection must be "equirectangular"; aspect ratio alone does not prove or convert projection`);
+  }
   const image = decodePng(requireFile(ctx, options.slot ?? 'result', type));
   const width = positiveInt(options.width ?? 256, `${type}.width`);
   const height = positiveInt(options.height ?? 128, `${type}.height`);
@@ -16,6 +19,11 @@ export function bake(job, ctx) {
   return {
     bucket: options.bucket ?? defaultBucket,
     key: options.name ?? job.id,
-    value: { ...imageValue(small, width, height), equirect: true },
+    value: {
+      ...imageValue(small, width, height),
+      sourceProjection: 'equirectangular',
+      projectionConversion: 'none',
+      equirect: true,
+    },
   };
 }

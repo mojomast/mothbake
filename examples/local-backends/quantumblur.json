@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "generator": "mothbake-local-quantumblur",
+  "jobs": [
+    {
+      "id": "qb-rock",
+      "engine": "local:quantumblur",
+      "generateValues": { "type": "height", "size": 32, "seed": 11, "kind": "noise", "freq": 5, "octaves": 4 },
+      "params": { "xi": 0.5, "locality": 1, "axis": "x" },
+      "raw": "qb-rock",
+      "bakes": [
+        { "type": "raw-grid", "name": "qb-rock-grid" },
+        { "type": "normal-map", "name": "qb-rock", "size": 32, "strength": 1.7 }
+      ]
+    }
+  ],
+  "emitters": [
+    { "type": "files" },
+    { "type": "json", "file": "quantumblur.json" }
+  ]
+}

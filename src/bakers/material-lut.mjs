@@ -4,6 +4,7 @@
 import { decodeHdr } from '../decoders/hdr.mjs';
 import { unzip } from '../decoders/zip.mjs';
 import { hdrToRgb8, toBase64 } from '../image.mjs';
+import { hashBytes } from '../identity.mjs';
 import { positiveInt, requireFile } from './util.mjs';
 
 export const type = 'material-lut';
@@ -35,6 +36,20 @@ export function bake(job, ctx) {
   return {
     bucket: options.bucket ?? defaultBucket,
     key: options.name ?? job.id,
-    value: { size, format: 'rgb8', r: toBase64(r), t: toBase64(t) },
+    value: {
+      size,
+      format: 'rgb8',
+      r: toBase64(r),
+      t: toBase64(t),
+      preview: { size, format: 'rgb8', toneMapped: true },
+      masters: {
+        reflectance: { container: 'radiance-hdr', data: toBase64(reflectance), bytes: reflectance.length, sha256: hashBytes(reflectance) },
+        transmittance: { container: 'radiance-hdr', data: toBase64(transmittance), bytes: transmittance.length, sha256: hashBytes(transmittance) },
+      },
+      axes: options.axes ?? null,
+      units: options.units ?? null,
+      coordinateConvention: options.coordinateConvention ?? null,
+      interpretation: 'Reflectance/transmittance LUT masters; not PBR roughness or metallic maps.',
+    },
   };
 }

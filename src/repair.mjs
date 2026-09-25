@@ -12,42 +12,33 @@
 // Records are rebuilt in config order and handed to the configured emitters, so
 // `mothbake repair` reproduces the local artifacts deterministically.
 
-import fs from 'node:fs';
 import path from 'node:path';
-import { resolveBakers } from './bakers/index.mjs';
+import { bakerTypes, resolveBakers } from './bakers/index.mjs';
+import { bakeSpecs } from './bakers/specs.mjs';
 import { summarizeRecords } from './bundle.mjs';
-import { runEmitters } from './emitters/index.mjs';
+import { resolveEmitters, runEmitters } from './emitters/index.mjs';
 import { selectJobs } from './runner.mjs';
+import { readArchive } from './archive.mjs';
+import { openRunJournal } from './run-journal.mjs';
+
+function checkAbort(signal) {
+  if (signal?.aborted) {
+    const error = new Error('local repair aborted', { cause: signal.reason });
+    error.name = 'AbortError';
+    throw error;
+  }
+}
 
 /**
  * Bake types whose inputs are entirely local. A record of one of these types
  * can be rebuilt from the raw archive with no API call: everything `ir`,
  * `echo-map`, `audio-clip` and `audio-stitch` read lives under `<out>/raw/<raw>/`.
  */
-export const LOCAL_BAKE_TYPES = new Set(['ir', 'ir-descriptor', 'echo-map', 'audio-clip', 'audio-stitch']);
+export const LOCAL_BAKE_TYPES = new Set(bakerTypes);
 
 /** True when a job's bake type is rebuildable offline from its raw outputs. */
 export function isLocalBake(job) {
-  return Boolean(job) && LOCAL_BAKE_TYPES.has(job.bake?.type);
-}
-
-const sanitize = (name) => String(name).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
-
-/** Slot names a job's baker may read, so sanitized archive names map back. */
-function declaredSlots(job) {
-  const bake = job.bake ?? {};
-  const slots = new Set(['result']);
-  for (const key of ['slot', 'tapsSlot', 'irSlot']) {
-    if (typeof bake[key] === 'string' && bake[key]) slots.add(bake[key]);
-  }
-  const order = bake.slots ?? bake.order;
-  if (Array.isArray(order)) {
-    for (const entry of order) {
-      if (typeof entry === 'string' && entry) slots.add(entry);
-      else if (entry && typeof entry.slot === 'string' && entry.slot) slots.add(entry.slot);
-    }
-  }
-  return slots;
+  return Boolean(job) && bakeSpecs(job).length > 0 && bakeSpecs(job).every((bake) => LOCAL_BAKE_TYPES.has(bake.type));
 }
 
 /**
@@ -57,41 +48,12 @@ function declaredSlots(job) {
  * sanitized form so a slot like `Taps` still resolves.
  */
 export function readRawResults(rawDir, rawName, outDir = path.dirname(rawDir), job = {}) {
-  const files = new Map();
-  const saved = new Map();
-  let result = null;
-  if (!fs.existsSync(rawDir)) return { files, saved, result };
-  const bySanitized = new Map();
-  for (const slot of declaredSlots(job)) bySanitized.set(sanitize(slot), slot);
-  for (const name of fs.readdirSync(rawDir).sort()) {
-    const file = path.join(rawDir, name);
-    let stat;
-    try {
-      stat = fs.statSync(file);
-    } catch {
-      continue;
-    }
-    if (!stat.isFile()) continue;
-    if (name === 'result.json') {
-      try {
-        result = JSON.parse(fs.readFileSync(file, 'utf8'));
-      } catch {
-        result = null;
-      }
-      continue;
-    }
-    const extension = path.extname(name);
-    const stem = extension ? name.slice(0, -extension.length) : name;
-    const slot = bySanitized.get(stem) ?? stem;
-    files.set(slot, fs.readFileSync(file));
-    saved.set(slot, {
-      file,
-      relative: path.relative(outDir, file),
-      contentType: null,
-      assetId: null,
-    });
+  try {
+    return readArchive({ outDir, rawName, rawDir, job });
+  } catch (error) {
+    if (/no raw outputs/.test(error.message)) return { files: new Map(), saved: new Map(), result: null, verified: false };
+    throw error;
   }
-  return { files, saved, result };
 }
 
 /**
@@ -102,6 +64,7 @@ export function readRawResults(rawDir, rawName, outDir = path.dirname(rawDir), j
  * @param {{
  *   config: object, configDir?: string, outDir: string,
  *   only?: string|string[]|null, log?: (message: string) => void,
+ *   signal?: AbortSignal,
  * }} options
  */
 export function rebuildLocalBakes(options = {}) {
@@ -111,7 +74,9 @@ export function rebuildLocalBakes(options = {}) {
     outDir,
     only = null,
     log = () => {},
+    signal,
   } = options;
+  checkAbort(signal);
   const jobs = selectJobs(config, only).filter((job) => job.enabled !== false && isLocalBake(job));
   const bakers = resolveBakers(config);
   const records = [];
@@ -119,34 +84,41 @@ export function rebuildLocalBakes(options = {}) {
   const failures = [];
 
   for (const job of jobs) {
-    const type = job.bake.type;
+    checkAbort(signal);
+    options.onJob?.(job.id);
     const rawName = job.raw || job.id;
-    const rawDir = path.join(outDir, 'raw', rawName);
-    if (!fs.existsSync(rawDir)) {
-      const message = `no raw outputs at ${path.relative(outDir, rawDir) || rawDir}; nothing to rebuild`;
-      log(`- ${job.id}: ${message}`);
-      failures.push({ id: job.id, engine: job.engine, message });
-      continue;
-    }
     try {
-      const { files, saved, result } = readRawResults(rawDir, rawName, outDir, job);
-      const baker = bakers[type];
-      if (!baker) throw new Error(`unknown baker: ${type}`);
-      const fragment = baker(job, { files, saved, result, bake: job.bake, job, rawName, outDir, configDir, log });
-      records.push({ job: job.id, type, ...fragment });
+      const { files, saved, result, verified } = readArchive({ outDir, rawName, job });
+      const specs = bakeSpecs(job);
+      for (const bake of specs) {
+        checkAbort(signal);
+        const type = bake.type;
+        const baker = bakers[type];
+        if (!baker) throw new Error(`unknown baker: ${type}`);
+        const fragment = baker(job, { files, saved, result, bake, job, rawName, outDir, configDir, log });
+        checkAbort(signal);
+        records.push({ job: job.id, type, ...fragment });
+        options.onRecord?.(records.at(-1));
+        log(`  rebuilt ${fragment.bucket}.${fragment.key}`);
+      }
       provenance[job.id] = {
         engine: job.engine,
         jobId: job.jobId || null,
-        mode: job.mode || job.params?.mode || 'emu',
-        name: job.bake?.name ?? null,
+        mode: job.mode ?? job.params?.mode ?? null,
+        name: specs.length === 1 ? specs[0].name ?? null : null,
+        names: specs.map((bake) => bake.name ?? null),
         credits: job.credits ?? null,
+        archiveVerification: verified ? 'hash-verified' : 'legacy-unverified',
       };
-      log(`  rebuilt ${fragment.bucket}.${fragment.key}`);
     } catch (error) {
+      checkAbort(signal);
       log(`  FAILED: ${error.message}`);
       failures.push({ id: job.id, engine: job.engine, message: error.message });
     }
+    options.onJob?.(null);
   }
+
+  checkAbort(signal);
 
   return { records, provenance, failures };
 }
@@ -157,6 +129,7 @@ export function rebuildLocalBakes(options = {}) {
  * @param {{
  *   config: object, configDir?: string, outDir: string,
  *   only?: string|string[]|null, log?: (message: string) => void,
+ *   signal?: AbortSignal, breakLock?: boolean, journalOptions?: object,
  * }} options
  */
 export async function repairConfig(options = {}) {
@@ -166,19 +139,55 @@ export async function repairConfig(options = {}) {
     outDir,
     only = null,
     log = () => {},
+    breakLock = false,
+    journalOptions,
+    signal,
   } = options;
-  const version = config.version ?? 1;
-  const generator = config.generator ?? 'mothbake';
-  const { records, provenance, failures } = rebuildLocalBakes({ config, configDir, outDir, only, log });
-  const written = records.length
-    ? await runEmitters({ config, records, outDir, provenance, version, generator, log })
-    : [];
-  return {
-    records,
-    provenance,
-    failures,
-    written,
-    outDir,
-    buckets: summarizeRecords(records),
-  };
+  const journal = openRunJournal(outDir, { breakLock, ...journalOptions });
+  let records = [];
+  let activeJob = null;
+  try {
+    const version = config.version ?? 1;
+    const generator = config.generator ?? 'mothbake';
+    // Keep the writer lock across baking AND asynchronous emitter publication.
+    // An emitter may await; another run must not publish in that interval.
+    const { records: rebuilt, provenance, failures } = rebuildLocalBakes({
+      config, configDir, outDir, only, signal,
+      log,
+      onJob(id) { activeJob = id; },
+      onRecord(record) { records.push(record); },
+    });
+    records = rebuilt;
+    checkAbort(signal);
+    // Check between emitters too: an abort while one async emitter is awaiting
+    // must not start the next publication step.
+    const emitConfig = signal ? {
+      ...config,
+      emitters: resolveEmitters(config).map(({ emit }) => async (items, context) => {
+        checkAbort(signal);
+        const paths = await emit(items, { ...context, config });
+        checkAbort(signal);
+        return paths;
+      }),
+    } : config;
+    const written = records.length
+      ? await runEmitters({ config: emitConfig, records, outDir, provenance, version, generator, log })
+      : [];
+    checkAbort(signal);
+    return { records, provenance, failures, written, outDir, buckets: summarizeRecords(records) };
+  } catch (error) {
+    // Do not invent journal entries for a raw-only offline repair. Preserve
+    // existing remote IDs and make interruption of known local work durable.
+    const ids = new Set(records.map((record) => record.job));
+    if (activeJob) ids.add(activeJob);
+    for (const id of ids) {
+      const current = journal.get(id);
+      if (current && current.state !== 'unknown-submission' && current.state !== 'remote-failed') {
+        journal.transition(id, 'local-failed', { detail: signal?.aborted ? 'local repair aborted' : 'repair emission failed' });
+      }
+    }
+    throw error;
+  } finally {
+    journal.close();
+  }
 }

@@ -2,12 +2,11 @@
 //
 // `createApi`'s `sleepImpl`/`nowImpl`/`randomImpl` hooks turn wall-clock waits
 // into recorded virtual time, so every backoff, Retry-After and poll interval
-// is asserted exactly without slowing the suite down. The end-to-end case runs
-// against a small local HTTP server that injects 429s.
+// is asserted exactly without slowing the suite down. The end-to-end case uses
+// an injected fake fetch that injects 429s; no socket or live API is required.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { createApi } from '../src/api.mjs';
@@ -262,51 +261,88 @@ test('a submit is retried only on 429 and otherwise fails closed', async () => {
   assert.deepEqual(unavailable.sleeps, []);
 });
 
-/** A local Atlas-shaped API that rejects the first `limits.*` calls with 429. */
-function startRateLimitedApi(t, limits = {}) {
+test('safe asset and job GETs retry transient failures', async () => {
+  const { api, calls, sleeps } = harness([
+    jsonResponse(503, { detail: 'unavailable' }),
+    jsonResponse(200, { items: [] }),
+    async () => { throw new TypeError('fetch failed'); },
+    jsonResponse(200, { asset_id: 'asset-1' }),
+  ], { minIntervalMs: 0 });
+  await api.listJobs();
+  await api.getAsset('asset-1');
+  assert.equal(calls.length, 4);
+  assert.deepEqual(sleeps, [1000, 1000]);
+  assert.ok(calls.every((call) => call.startsWith('GET ')));
+});
+
+test('asset create and complete never repeat after ambiguous 5xx or transport failures', async (t) => {
+  const dir = makeTmpDir(t, 'asset-retry');
+  const file = path.join(dir, 'tile.png');
+  fs.writeFileSync(file, Buffer.from('tile'));
+  for (const stage of ['create', 'complete']) {
+    for (const failure of ['server', 'network']) {
+      const calls = [];
+      const api = createApi({
+        baseUrl: 'https://api.test', key: 'test-key', env: {}, minIntervalMs: 0,
+        maxRetries: 3, retryBaseMs: 1,
+        fetchImpl: async (url, init) => {
+          calls.push(`${init.method} ${url}`);
+          if (url === 'https://api.test/api/v1/assets' && stage === 'complete') {
+            return jsonResponse(200, { asset_id: 'asset-1', upload: { url: 'https://storage.test/put', method: 'PUT' } });
+          }
+          if (url === 'https://storage.test/put') return { ok: true, status: 200 };
+          if (failure === 'network') throw new TypeError('fetch failed');
+          return jsonResponse(503, { detail: 'unavailable' }, { 'retry-after': '0' });
+        },
+      });
+      await assert.rejects(api.uploadAsset(file), (error) => {
+        assert.match(error.message, /may or may not|ambiguous|check/i);
+        assert.equal(error.ambiguous, true);
+        if (failure === 'server') assert.equal(error.status, 503);
+        return true;
+      }, `${stage}: ${failure}`);
+      const postCalls = calls.filter((call) => call.startsWith('POST '));
+      assert.equal(postCalls.length, stage === 'create' ? 1 : 2, `${stage}: ${failure}: no duplicate POST`);
+      assert.equal(calls.length, stage === 'create' ? 1 : 3);
+    }
+  }
+});
+
+/** An Atlas-shaped fake fetch that rejects the first `limits.*` calls with 429. */
+function rateLimitedFetch(limits = {}) {
   const state = { created: 0, submits: 0, statuses: 0, requests: [] };
   const submitLimit = limits.submit ?? 2;
   const statusLimit = limits.status ?? 1;
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    req.on('data', () => {});
-    req.on('end', () => {
-      state.requests.push(`${req.method} ${url.pathname}`);
-      const json = (status, value, headers = {}) => {
-        res.writeHead(status, { 'content-type': 'application/json', ...headers });
-        res.end(JSON.stringify(value));
-      };
-      if (req.method === 'POST' && url.pathname === '/api/v1/engines/blur-v1/process') {
-        state.submits += 1;
-        if (state.submits <= submitLimit) return json(429, { detail: 'slow down' }, { 'retry-after': '1' });
-        state.created += 1;
-        return json(200, { job_id: 'job-1' });
-      }
-      if (req.method === 'GET' && url.pathname === '/api/v1/jobs/job-1/status') {
-        state.statuses += 1;
-        if (state.statuses <= statusLimit) return json(429, { detail: 'slow down' });
-        if (state.statuses <= statusLimit + 2) return json(200, { status: 'running', progress: { step: 'encoding' } });
-        return json(200, { status: 'completed', progress: { step: 'done' } });
-      }
-      if (req.method === 'GET' && url.pathname === '/api/v1/jobs/job-1/result') {
-        return json(200, {
-          outputs: [{ slot: 'result', url: `http://127.0.0.1:${server.address().port}/files/tile.png`, content_type: 'image/png' }],
-          result: null,
-        });
-      }
-      if (req.method === 'GET' && url.pathname === '/files/tile.png') {
-        res.writeHead(200, { 'content-type': 'image/png' });
-        return res.end(readFixture('tile.png'));
-      }
-      return json(404, { detail: `no route ${req.method} ${url.pathname}` });
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      t.after(() => new Promise((done) => server.close(done)));
-      resolve({ base: `http://127.0.0.1:${server.address().port}`, state });
-    });
-  });
+  const fetchImpl = async (url, init = {}) => {
+    const pathname = new URL(url).pathname;
+    const method = init.method || 'GET';
+    state.requests.push(`${method} ${pathname}`);
+    if (method === 'POST' && pathname === '/api/v1/engines/blur-v1/process') {
+      state.submits += 1;
+      if (state.submits <= submitLimit) return jsonResponse(429, { detail: 'slow down' }, { 'retry-after': '1' });
+      state.created += 1;
+      return jsonResponse(200, { job_id: 'job-1' });
+    }
+    if (method === 'GET' && pathname === '/api/v1/jobs/job-1/status') {
+      state.statuses += 1;
+      if (state.statuses <= statusLimit) return jsonResponse(429, { detail: 'slow down' });
+      if (state.statuses <= statusLimit + 2) return jsonResponse(200, { status: 'running', progress: { step: 'encoding' } });
+      return jsonResponse(200, { status: 'completed', progress: { step: 'done' } });
+    }
+    if (method === 'GET' && pathname === '/api/v1/jobs/job-1/result') {
+      return jsonResponse(200, {
+        outputs: [{ slot: 'result', url: 'https://storage.test/files/tile.png', content_type: 'image/png' }],
+        result: null,
+      });
+    }
+    if (method === 'GET' && pathname === '/files/tile.png') {
+      const bytes = readFixture('tile.png');
+      return { ok: true, status: 200, headers: { get: (name) => name === 'content-type' ? 'image/png' : null },
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    }
+    return jsonResponse(404, { detail: `no route ${method} ${pathname}` });
+  };
+  return { base: 'https://api.test', state, fetchImpl };
 }
 
 test('a rate-limited run retries, submits exactly once, and completes', async (t) => {
@@ -327,19 +363,23 @@ test('a rate-limited run retries, submits exactly once, and completes', async (t
     ],
     emitters: [{ type: 'files' }],
   });
-  const { base, state } = await startRateLimitedApi(t);
+  const { base, state, fetchImpl } = rateLimitedFetch();
 
   const sleeps = [];
   const logs = [];
   let now = 0;
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  const preview = await runConfig({ config, configFile, configDir: dir, outDir, key: 'test-key', base, env: {}, dry: true });
   const result = await runConfig({
-    config: JSON.parse(fs.readFileSync(configFile, 'utf8')),
+    config,
     configFile,
     configDir: dir,
     outDir,
     key: 'test-key',
     base,
+    fetchImpl,
     env: {},
+    approveSpend: preview.executionPlan.fingerprint,
     sleepImpl: async (ms) => {
       sleeps.push(ms);
       now += ms;

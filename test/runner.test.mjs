@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { loadConfig } from '../src/config.mjs';
+import { buildExecutionPlan } from '../src/execution-plan.mjs';
 import { jobsRequiringApi, normalizeOnly, runConfig, selectJobs } from '../src/runner.mjs';
 import { ROOT } from './helpers.mjs';
 
@@ -14,6 +15,11 @@ const config = {
     { id: 'd', engine: 'e' },
   ],
 };
+
+function approved(options) {
+  const plan = buildExecutionPlan({ config: options.config, configDir: options.configDir, outDir: options.outDir, only: options.only, force: options.force, baseUrl: options.base ?? 'https://api.mothquantum.com' });
+  return { ...options, approveSpend: plan.fingerprint };
+}
 
 test('normalizeOnly accepts repeats and comma-separated values', () => {
   assert.equal(normalizeOnly(null), null);
@@ -87,12 +93,12 @@ test('runConfig strict rethrows the first job failure instead of collecting it',
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const live = { jobs: [{ id: 'needs-key', engine: 'e' }] };
 
-  const collected = await runConfig({ config: live, configDir: dir, outDir: path.join(dir, 'out'), key: null, log: () => {} });
+  const collected = await runConfig(approved({ config: live, configDir: dir, outDir: path.join(dir, 'out'), key: null, log: () => {} }));
   assert.equal(collected.failures.length, 1);
 
   await assert.rejects(
-    () => runConfig({ config: live, configDir: dir, outDir: path.join(dir, 'out'), key: null, strict: true, log: () => {} }),
-    /MOTH_API_KEY is required to run live job "needs-key"/,
+    () => runConfig(approved({ config: live, configDir: dir, outDir: path.join(dir, 'out'), key: null, strict: true, log: () => {} })),
+    /MOTH_API_KEY is required to submit live job "needs-key"/,
   );
 });
 
@@ -108,7 +114,7 @@ test('runConfig records jobIds back into JSON configs only when they change', as
   const outDir = path.join(dir, 'out');
   // No API calls happen: the job fails on the missing key, so nothing is
   // written back and the file stays byte-identical.
-  await runConfig({
+  await runConfig(approved({
     config: JSON.parse(fs.readFileSync(configFile, 'utf8')),
     configFile,
     configDir: dir,
@@ -116,6 +122,6 @@ test('runConfig records jobIds back into JSON configs only when they change', as
     key: null,
     writeBack: true,
     log: () => {},
-  });
+  }));
   assert.equal(fs.readFileSync(configFile, 'utf8'), `${JSON.stringify(base, null, 2)}\n`);
 });

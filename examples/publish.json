@@ -20,7 +20,7 @@
       "engine": "blur-v1",
       "credits": 1,
       "raw": "nebula-sky",
-      "bake": { "type": "sky", "name": "nebula", "width": 64, "height": 32 },
+      "bake": { "type": "sky", "name": "nebula", "width": 64, "height": 32, "sourceProjection": "equirectangular" },
       "recorded": { "outputs": { "result": "../test/fixtures/sky.png" } }
     }
   ]

@@ -51,7 +51,7 @@ test('downloads enforce exact limit, absent/deceptive lengths, content-type and 
   const bytes = Buffer.from('1234');
   const exact = streamed(bytes, { 'content-type': 'image/png', 'content-length': '4' });
   assert.deepEqual(await client(async (_url, init) => {
-    assert.equal(init, undefined, 'download has no bearer or request options');
+    assert.equal(init?.headers?.Authorization, undefined, 'download has no bearer token');
     return exact.response;
   }, { maxDownloadBytes: 4 }).downloadOutput(signed, { contentType: 'image/png' }), bytes);
   for (const values of [{}, { 'content-length': '1' }]) {
@@ -159,5 +159,5 @@ test('bearer is sent to API base but not presigned download', async () => {
   await api.listEngines();
   await api.downloadOutput('https://storage.test/file?signature=secret');
   assert.equal(calls[0].init.headers.Authorization, 'Bearer private-key');
-  assert.equal(calls[1].init, undefined);
+  assert.equal(calls[1].init?.headers?.Authorization, undefined);
 });

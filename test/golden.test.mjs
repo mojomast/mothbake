@@ -38,7 +38,7 @@ function goldenRecords() {
       type: 'sky',
       ...bakers.sky(
         { id: 'sky-job' },
-        { files: files(['result', readFixture('sky.png')]), bake: { type: 'sky', name: 'nebula', width: 8, height: 4 } },
+        { files: files(['result', readFixture('sky.png')]), bake: { type: 'sky', name: 'nebula', width: 8, height: 4, sourceProjection: 'equirectangular' } },
       ),
     },
     {

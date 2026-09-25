@@ -39,7 +39,17 @@ export const BAKED = {
       "width": 8,
       "height": 8,
       "format": "rgba8",
-      "data": "AAAA/wEBAP8AAAD/AAAA/wAAAP8BAQH/AQEA/wEBAf8BAAD/AQEB/wEBAf8BAQH/AQEA/wICAf8BAQH/AQEB/wAAAP8BAQD/AQEB/wEBAf8BAQH/AgIB/wEBAf8BAQH/AQEA/wEBAf8CAQH/AgIB/wEBAf8CAgL/AQEB/wEBAf8BAAD/AgEB/wEBAf8CAgH/AgIB/wMDAv8BAQH/AAAA/wEBAf8DAgL/AgIC/wIBAf8CAgL/AgIC/wICAv8CAgL/AQAA/wEBAf8BAQH/AQEB/wAAAP8BAQH/AQEB/wEBAf8AAAD/AQAA/wEBAP8BAQH/AQEA/wICAv8BAQH/AQEB/w=="
+      "data": "AAAA/wMDA/8BAQD/AgIC/wMDA/8EBAP/AwMD/wAAAP8CAgH/DAsJ/xEQDf8TEQ//FhQS/xQSEP8TEQ//AwIC/wQEA/8QDwz/FhQR/xYUEv8aFxX/FBIQ/xUTEf8FBAT/AwMD/xMRD/8XFRL/FRMQ/xoXFP8XFRL/EQ8N/wQEA/8EBAP/GRcT/xsYFf8aGBX/IyAc/x8cGP8UExD/BQUE/wMDA/8VExH/EhEO/xQSEP8aGBX/FhUS/xoYFf8EBAP/AgIC/xAODP8RDw3/EA8N/xgWE/8WFBH/GBYT/wMDAv8BAAD/BAQD/wEBAf8DAwL/BQQE/wYFBP8FBAT/AQEA/w==",
+      "resample": "bilinear",
+      "periodicProcessing": false,
+      "seamDiagnostics": {
+        "mean": 0.002546,
+        "max": 0.007843,
+        "exact": false
+      },
+      "qualityWarnings": [
+        "Opposite boundaries differ; inspect the 3x3 tiled preview before approval."
+      ]
     }
   },
   "sky": {
@@ -48,6 +58,8 @@ export const BAKED = {
       "height": 4,
       "format": "rgba8",
       "data": "AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8=",
+      "sourceProjection": "equirectangular",
+      "projectionConversion": "none",
       "equirect": true
     }
   },

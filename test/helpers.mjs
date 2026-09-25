@@ -4,12 +4,13 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const FIXTURES = path.join(ROOT, 'test', 'fixtures');
 export const CLI = path.join(ROOT, 'bin', 'mothbake.mjs');
-const TMP_ROOT = path.join(ROOT, 'test', 'tmp');
+const TMP_ROOT = path.join(os.tmpdir(), 'opencode', 'mothbake-test-tmp');
 
 export function fixture(name) {
   return path.join(FIXTURES, name);

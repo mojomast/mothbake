@@ -88,14 +88,19 @@ test('texture-tile fails clearly when the result slot is missing', () => {
 test('sky produces an equirectangular texture', () => {
   const record = bakers.sky(
     { id: 'nebula' },
-    ctx({ files: { result: readFixture('sky.png') }, bake: { type: 'sky', name: 'nebula', width: 32, height: 16 } }),
+    ctx({ files: { result: readFixture('sky.png') }, bake: { type: 'sky', name: 'nebula', width: 32, height: 16, sourceProjection: 'equirectangular' } }),
   );
   assert.equal(record.bucket, 'sky');
   assert.equal(record.key, 'nebula');
   assert.equal(record.value.width, 32);
   assert.equal(record.value.height, 16);
   assert.equal(record.value.equirect, true);
+  assert.equal(record.value.projectionConversion, 'none');
   assert.equal(fromBase64(record.value.data).length, 32 * 16 * 4);
+});
+
+test('sky refuses to infer projection from aspect ratio', () => {
+  assert.throws(() => bakers.sky({ id: 'unknown' }, ctx({ files: { result: readFixture('sky.png') }, bake: { type: 'sky', width: 32, height: 16 } })), /sourceProjection/);
 });
 
 test('material-lut extracts both LUTs from a ZIP result', () => {
@@ -108,6 +113,10 @@ test('material-lut extracts both LUTs from a ZIP result', () => {
   assert.equal(record.value.format, 'rgb8');
   assert.equal(fromBase64(record.value.r).length, 12 * 12 * 3);
   assert.equal(fromBase64(record.value.t).length, 12 * 12 * 3);
+  assert.equal(record.value.preview.toneMapped, true);
+  assert.deepEqual(Buffer.from(record.value.masters.reflectance.data, 'base64').subarray(0, 10), Buffer.from('#?RADIANCE'));
+  assert.match(record.value.masters.reflectance.sha256, /^[a-f0-9]{64}$/);
+  assert.match(record.value.interpretation, /not PBR roughness/);
 });
 
 test('material-lut names the missing entries in its error', () => {
@@ -226,6 +235,21 @@ test('level-graph flattens a labyrinth result', () => {
   assert.equal(record.value.measurements.length, 8);
   assert.deepEqual(Object.keys(record.value.metrics).sort(), ['backend', 'mode', 'shots', 'szSamp']);
   assert.ok(record.value.cells.some((cell) => cell.radiating === true));
+  assert.equal(record.value.diagnostics.connected, true);
+  assert.equal(record.value.diagnostics.disconnectedCells, 0);
+  assert.equal(record.value.playable, false);
+  assert.match(record.value.limitation, /consumer integration/);
+});
+
+test('level-graph reports disconnected regions and rejects invalid edges', () => {
+  const disconnected = { output: { grid_size: { rows: 2, cols: 2 }, coupling_map: [[0, 1]], initial_states: { 3: { radiating: true } } } };
+  const record = bakers['level-graph']({ id: 'x' }, ctx({ result: disconnected, bake: { type: 'level-graph' } }));
+  assert.equal(record.value.diagnostics.connected, false);
+  assert.equal(record.value.diagnostics.componentCount, 3);
+  assert.equal(record.value.diagnostics.reachableFromZero, 2);
+  assert.equal(record.value.diagnostics.disconnectedCells, 2);
+  assert.deepEqual(record.value.diagnostics.radiatingReachable, []);
+  assert.throws(() => bakers['level-graph']({ id: 'bad' }, ctx({ result: { output: { grid_size: { rows: 1, cols: 2 }, coupling_map: [[0, 2]] } } })), /invalid node pair/);
 });
 
 test('level-graph rejects unexpected result shapes', () => {

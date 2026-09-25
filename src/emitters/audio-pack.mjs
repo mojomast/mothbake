@@ -20,13 +20,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fromBase64 } from '../image.mjs';
 import { assertJsonSafe, mergeBundles, readJsonArtifact, validateForPublish, writeFileAtomic } from '../publish.mjs';
+import { destination, readExternalAudio, recordDestination } from './files.mjs';
 
 export const name = 'audio-pack';
 
 const posix = (value) => value.split(path.sep).join('/');
 
+function assertDistinctSource(root, relative, source, record) {
+  const target = path.resolve(root, relative);
+  if (target === source || (fs.existsSync(target) && fs.realpathSync(target) === fs.realpathSync(source))) {
+    throw new Error(`audio-pack: ${record.type} "${record.key}" output would overwrite source file: ${record.value.file}`);
+  }
+}
+
 function write(root, relative, data, written) {
-  const target = path.join(root, relative);
+  const target = destination(root, relative, 'audio-pack emitter');
   writeFileAtomic(target, data);
   written.push(target);
   return target;
@@ -47,12 +55,26 @@ function clipDescriptor(record, value, file, url) {
     gain: value.gain ?? null,
   };
   if (value.meta !== undefined) descriptor.meta = value.meta;
+  if (value.qualityReport !== undefined) descriptor.qualityReport = value.qualityReport;
+  if (typeof value.meta?.group === 'string') descriptor.group = value.meta.group;
+  if (typeof value.meta?.weight === 'number' && Number.isFinite(value.meta.weight) && value.meta.weight >= 0) descriptor.weight = value.meta.weight;
+  if (Array.isArray(value.meta?.tags) && value.meta.tags.every((tag) => typeof tag === 'string')) descriptor.tags = value.meta.tags;
   return descriptor;
 }
 
 export function emit(records, ctx) {
   const { outDir, options = {}, provenance = {}, version = 1, generator = 'mothbake' } = ctx;
-  const root = path.join(outDir, options.dir ?? '');
+  const root = destination(outDir, options.dir ?? '', 'audio-pack dir', { directory: true });
+  const sourceOutDir = ctx.sourceOutDir ?? outDir;
+  if (options.manifest !== false) destination(root, options.manifest ?? 'manifest.json', 'audio-pack manifest');
+  for (const record of records) {
+    if (!['audio-clip', 'audio-stitch', 'ir', 'echo-map'].includes(record.type)) continue;
+    for (const ext of ['.wav', '.json']) recordDestination(root, record, ext, 'audio-pack record');
+    if (record.type === 'ir' && typeof record.value?.file === 'string') {
+      const extension = path.extname(record.value.file) || '.wav';
+      recordDestination(root, record, extension, 'audio-pack record');
+    }
+  }
   const pretty = options.pretty ?? 2;
   const written = [];
   const clips = {};
@@ -63,16 +85,16 @@ export function emit(records, ctx) {
     const value = record.value ?? {};
     if (record.type === 'audio-clip' || record.type === 'audio-stitch') {
       let buffer;
+      let source;
       if (typeof value.data === 'string' && value.container === 'wav') {
         buffer = fromBase64(value.data);
       } else if (typeof value.file === 'string') {
-        const source = path.resolve(outDir, value.file);
-        if (!fs.existsSync(source)) throw new Error(`audio-pack: ${record.type} "${record.key}" file not found: ${value.file}`);
-        buffer = fs.readFileSync(source);
+        ({ source, buffer } = readExternalAudio(sourceOutDir, record, value));
       } else {
         throw new Error(`audio-pack: ${record.type} "${record.key}" has neither data nor file`);
       }
       const relative = path.join(record.bucket, `${record.key}.wav`);
+      if (source) assertDistinctSource(root, relative, source, record);
       const target = write(root, relative, buffer, written);
       const packRelative = posix(path.relative(root, target));
       clips[`${record.bucket}/${record.key}`] = clipDescriptor(record, value, packRelative, value.url ?? packRelative);
@@ -81,12 +103,11 @@ export function emit(records, ctx) {
     if (record.type === 'ir') {
       let packRelative = null;
       if (typeof value.file === 'string') {
-        const source = path.resolve(outDir, value.file);
-        if (fs.existsSync(source)) {
-          const relative = path.join(record.bucket, `${record.key}${path.extname(source) || '.wav'}`);
-          const target = write(root, relative, fs.readFileSync(source), written);
-          packRelative = posix(path.relative(root, target));
-        }
+        const { source, buffer } = readExternalAudio(sourceOutDir, record, value);
+        const relative = path.join(record.bucket, `${record.key}${path.extname(source) || '.wav'}`);
+        assertDistinctSource(root, relative, source, record);
+        const target = write(root, relative, buffer, written);
+        packRelative = posix(path.relative(root, target));
       }
       irs[`${record.bucket}/${record.key}`] = {
         bucket: record.bucket,
@@ -119,7 +140,7 @@ export function emit(records, ctx) {
 
   if (options.manifest !== false) {
     const manifestName = options.manifest ?? 'manifest.json';
-    const target = path.join(root, manifestName);
+    const target = destination(root, manifestName, 'audio-pack manifest');
     const label = `audio-pack emitter (${manifestName})`;
     const fresh = { version, generator, provenance, clips, spaces, irs };
     const previous = options.merge ? readJsonArtifact(target, label) : null;

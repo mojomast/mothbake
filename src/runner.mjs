@@ -8,35 +8,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createApi, resolveBaseUrl } from './api.mjs';
+import { archiveResponse, readArchive } from './archive.mjs';
 import { resolveBakers } from './bakers/index.mjs';
+import { bakeSpecs } from './bakers/specs.mjs';
 import { summarizeRecords } from './bundle.mjs';
 import { runEmitters } from './emitters/index.mjs';
+import { assertSpendApproved, buildExecutionPlan, IMPLEMENTATION_ID } from './execution-plan.mjs';
+import { exportFingerprint, generationInstanceFingerprint, hashFile, hashJson, localBakeFingerprint, recordedFixtureFingerprint } from './identity.mjs';
+import { buildJobGraph } from './job-graph.mjs';
 import { writeFileAtomic } from './publish.mjs';
+import { openRunJournal, readRunJournal } from './run-journal.mjs';
 import { generateValues, generators as builtinGenerators } from './values.mjs';
-
-const CONTENT_TYPE_EXTENSIONS = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'image/vnd.radiance': 'hdr',
-  'application/zip': 'zip',
-  'application/json': 'json',
-  'audio/wav': 'wav',
-  'audio/x-wav': 'wav',
-  'audio/midi': 'mid',
-  'audio/mpeg': 'mp3',
-  'application/octet-stream': 'bin',
-};
-
-const sanitize = (name) => String(name).replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
-
-function extensionFor(contentType, url) {
-  if (contentType && CONTENT_TYPE_EXTENSIONS[contentType]) return CONTENT_TYPE_EXTENSIONS[contentType];
-  const fromUrl = path.extname(new URL(url, 'https://example.invalid').pathname).replace(/^\./, '');
-  if (fromUrl && /^[a-z0-9]{1,8}$/i.test(fromUrl)) return fromUrl;
-  return 'bin';
-}
 
 /** Normalize `--only` values (repeatable and comma separated) to a Set. */
 export function normalizeOnly(only) {
@@ -56,12 +38,7 @@ export function selectJobs(config, only) {
   const jobs = config.jobs ?? [];
   const set = normalizeOnly(only);
   if (!set) return jobs;
-  const known = new Set(jobs.map((job) => job.id));
-  const missing = [...set].filter((id) => !known.has(id));
-  if (missing.length) {
-    throw new Error(`--only did not match any job: ${missing.join(', ')} (known ids: ${jobs.map((job) => job.id).join(', ')})`);
-  }
-  return jobs.filter((job) => set.has(job.id));
+  return buildJobGraph(config, { only: set }).jobs;
 }
 
 /** Jobs that may contact the API for a given run (used for the key check). */
@@ -99,21 +76,13 @@ function normalizeInputRef(ref, slot) {
   return { job: ref.job, slot: ref.slot || slot };
 }
 
-/** Locate an earlier job's raw output archive on disk, if it exists. */
-function findRawOutput(outDir, job, slot) {
-  const dir = path.join(outDir, 'raw', job.raw || job.id);
-  if (!fs.existsSync(dir)) return null;
-  const prefix = sanitize(slot);
-  const match = fs.readdirSync(dir).find((name) => name.startsWith(`${prefix}.`));
-  return match ? path.join(dir, match) : null;
-}
-
 /**
  * Resolve `job.inputFrom` entries to asset ids without paying for the source
- * job again. Resolution order: this run's captured asset id, the persisted
- * `job.assetIds` in the config, then the earlier raw output re-uploaded.
+ * job again. Resolution uses only this run's captured asset id or a re-upload
+ * of this run's freshly verified archive. Persisted mutable ids are retained
+ * for compatibility/provenance but cannot satisfy a changed dependency edge.
  */
-async function resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log }) {
+async function resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log, signal }) {
   const resolved = {};
   for (const [slot, rawRef] of Object.entries(inputFrom ?? {})) {
     const ref = normalizeInputRef(rawRef, slot);
@@ -126,48 +95,89 @@ async function resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log
       continue;
     }
     const configJob = (config.jobs ?? []).find((candidate) => candidate.id === ref.job);
-    const savedAsset = configJob?.assetIds?.[ref.slot];
-    if (savedAsset) {
-      resolved[slot] = savedAsset;
-      log(`  inputFrom ${slot} <- ${label} (persisted asset ${savedAsset})`);
-      continue;
-    }
-    const source = prior?.saved?.get(ref.slot)?.file ?? findRawOutput(outDir, configJob ?? { id: ref.job, raw: ref.job }, ref.slot);
+    // The graph always includes ancestors. If this run did not verify/rebuild
+    // the ancestor, consuming its mutable config assetIds or an old raw path
+    // would silently cross a recipe change. Only this run's captured asset or
+    // freshly verified archived bytes may satisfy the edge.
+    if (!prior) throw new Error(`inputFrom "${slot}": dependency ${label} did not complete in this run; refusing stale persisted output`);
+    const source = prior.saved?.get(ref.slot)?.file;
     if (source && fs.existsSync(source)) {
-      resolved[slot] = await api.uploadAsset(source);
+      resolved[slot] = await api.uploadAsset(source, { signal });
       log(`  inputFrom ${slot} <- ${label} (re-uploaded ${path.relative(outDir, source)})`);
       continue;
     }
-    throw new Error(`inputFrom "${slot}": cannot resolve ${label} (no asset id and no raw output to upload)`);
+    throw new Error(`inputFrom "${slot}": cannot resolve ${label} from this run's verified outputs`);
   }
   return resolved;
 }
 
-async function resolveLiveResult({ api, job, inputs, inputFrom, config, runAssets, configDir, outDir, force, log, generatorRegistry }) {
-  if (job.jobId && !force) {
-    log(`  reusing job ${job.jobId}`);
-    // A recorded job id is only reused when the API confirms it is still
-    // `completed`. Anything else — failed, cancelled, still running, an
-    // unrecognized status, or a status request that errors — must never fall
-    // through to a fresh submission: that would silently spend credits when the
-    // user only meant to re-download an existing result. Require `--force`.
+function assertNotAborted(signal) {
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('run aborted');
+}
+
+function assertExecutable(job, inputs, configDir, generatorRegistry, planEntry, signal) {
+  assertNotAborted(signal);
+  const expected = planEntry.executable;
+  const params = { ...(job.params ?? {}) };
+  const generated = generateValues(job, generatorRegistry);
+  if (generated !== null) params.values = generated;
+  if (hashJson({ engine: job.engine, mode: job.mode ?? null, params }) !== hashJson({ engine: expected.engine, mode: expected.mode, params: expected.params })) {
+    throw new Error(`approved plan invalidated: executable params or generated values changed for "${job.id}"`);
+  }
+  for (const [slot, relative] of Object.entries(inputs)) {
+    const file = path.resolve(configDir, relative);
+    if (!fs.existsSync(file) || hashFile(file) !== expected.inputHashes[slot]) {
+      throw new Error(`approved plan invalidated: input bytes changed for "${job.id}" slot "${slot}"`);
+    }
+  }
+  if (Object.keys(inputs).length !== Object.keys(expected.inputHashes).length) throw new Error(`approved plan invalidated: input slots changed for "${job.id}"`);
+  return params;
+}
+
+async function resolveLiveResult({ api, job, inputs, inputFrom, config, runAssets, configDir, outDir, log, generatorRegistry, journal, planEntry, signal }) {
+  const existingId = planEntry.jobId;
+  if (existingId) {
+    log(`  ${planEntry.action === 'legacy-reuse' ? 'checking legacy' : 'resuming'} job ${existingId}`);
     let status;
     try {
-      status = await api.jobStatus(job.jobId);
+      status = await api.jobStatus(existingId, { signal });
     } catch (error) {
+      journal.transition(job.id, 'local-failed', { detail: 'status request failed' });
       throw new Error(
-        `recorded job "${job.id}" (${job.jobId}) could not be verified: ${error.message}. `
-          + 'Refusing to submit a fresh job automatically; pass --force to submit one (this spends credits).',
+        `recorded job "${job.id}" (${existingId}) could not be verified: ${error.message}. `
+          + 'Refusing to submit a fresh job automatically; resume after status access is restored.',
       );
     }
-    if (status?.status === 'completed') return api.jobResult(job.jobId);
-    const state = status?.status ?? 'unknown';
-    throw new Error(
-      `recorded job "${job.id}" (${job.jobId}) is ${state}, not completed. `
-        + 'Refusing to submit a fresh job automatically; pass --force to submit one (this spends credits).',
-    );
+    const state = status?.status;
+    if (typeof state !== 'string' || !state) {
+      journal.transition(job.id, 'local-failed', { jobId: existingId, detail: 'status response omitted state' });
+      throw new Error(`recorded job "${job.id}" (${existingId}) returned an unknown status; refusing to submit or poll blindly`);
+    }
+    if (state === 'failed' || state === 'cancelled') {
+      journal.transition(job.id, 'remote-failed', { jobId: existingId, detail: state });
+      throw new Error(`recorded job "${job.id}" (${existingId}) is ${state}; refusing to submit a replacement automatically`);
+    }
+    if (state !== 'completed') {
+      journal.transition(job.id, 'polling', { jobId: existingId });
+      try {
+        await api.waitForJob(existingId, { log, signal });
+      } catch (error) {
+        const terminal = error?.status === 'failed' || error?.status === 'cancelled';
+        journal.transition(job.id, terminal ? 'remote-failed' : 'local-failed', { jobId: existingId, detail: terminal ? String(error.status) : 'polling interrupted' });
+        throw error;
+      }
+    }
+    journal.transition(job.id, 'completed', { jobId: existingId });
+    job.jobId = existingId;
+    try {
+      return await api.jobResult(existingId, { signal });
+    } catch (error) {
+      journal.transition(job.id, 'local-failed', { jobId: existingId, detail: 'result retrieval failed' });
+      throw error;
+    }
   }
-  const fromAssets = await resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log });
+  let params = assertExecutable(job, inputs, configDir, generatorRegistry, planEntry, signal);
+  const fromAssets = await resolveInputFrom({ inputFrom, config, runAssets, outDir, api, log, signal });
   const inputEntries = Object.entries(inputs);
   let inputFiles;
   if (inputEntries.length || Object.keys(fromAssets).length) {
@@ -177,57 +187,47 @@ async function resolveLiveResult({ api, job, inputs, inputFrom, config, runAsset
       if (!fs.existsSync(file)) {
         throw new Error(`input "${slot}" not found: ${file} (run "mothbake sources" to generate source art)`);
       }
-      inputFiles[slot] = await api.uploadAsset(file);
+      assertExecutable(job, inputs, configDir, generatorRegistry, planEntry, signal);
+      inputFiles[slot] = await api.uploadAsset(file, { signal });
     }
     // An explicit inputFrom wins over a file input for the same slot (config warns).
     for (const [slot, assetId] of Object.entries(fromAssets)) inputFiles[slot] = assetId;
   }
-  const params = { ...(job.params || {}) };
-  const generated = generateValues(job, generatorRegistry);
-  if (generated) params.values = generated;
-  const submitted = await api.submitJob(job.engine, { params, inputFiles, mode: job.mode });
-  if (!submitted?.job_id) throw new Error(`submit for "${job.id}" returned no job_id`);
+  params = assertExecutable(job, inputs, configDir, generatorRegistry, planEntry, signal);
+  if (hashJson({ engine: job.engine, mode: job.mode ?? null, params }) !== hashJson({ engine: planEntry.executable.engine, mode: planEntry.executable.mode, params: planEntry.executable.params })) throw new Error(`approved plan invalidated: request body changed for "${job.id}"`);
+  journal.transition(job.id, 'submitting', { metadata: { recipeFingerprint: planEntry.recipeFingerprint } });
+  let submitted;
+  try {
+    submitted = await api.submitJob(job.engine, { params, inputFiles, mode: job.mode, signal });
+  } catch (error) {
+    journal.transition(job.id, error?.ambiguous ? 'unknown-submission' : 'local-failed', {
+      detail: error?.ambiguous ? 'submit outcome is ambiguous; manual reconciliation required' : 'submit rejected before a job id was received',
+    });
+    throw error;
+  }
+  if (!submitted?.job_id) {
+    journal.transition(job.id, 'unknown-submission', { detail: 'submit response contained no job id; manual reconciliation required' });
+    throw new Error(`submit for "${job.id}" returned no job_id; the outcome is ambiguous and will not be resubmitted automatically`);
+  }
   log(`  submitted ${submitted.job_id}`);
   job.jobId = submitted.job_id;
-  await api.waitForJob(submitted.job_id, { log });
-  return api.jobResult(submitted.job_id);
-}
-
-async function saveResponse({ response, api, outDir, rawName, log }) {
-  const files = new Map();
-  const saved = new Map();
-  const rawDir = path.join(outDir, 'raw', rawName);
-  fs.mkdirSync(rawDir, { recursive: true });
-
-  if (response.files) {
-    // Recorded fixture: buffers already in memory; keep the fixture's extension.
-    for (const [slot, buffer] of response.files) {
-      const extension = extensionFor(null, response.sources?.get(slot) ?? slot);
-      const relative = path.join('raw', rawName, `${sanitize(slot)}.${extension}`);
-      const target = path.join(outDir, relative);
-      writeFileAtomic(target, buffer);
-      files.set(slot, buffer);
-      saved.set(slot, { file: target, relative, contentType: null, assetId: null });
-      log(`  fixture ${path.relative(outDir, target)} (${buffer.length} bytes)`);
-    }
-  } else {
-    for (const output of response.outputs || []) {
-      const buffer = output.bufferOverride ?? (await api.downloadOutput(output.url, { contentType: output.content_type }));
-      const slot = output.slot || `output-${files.size}`;
-      const extension = extensionFor(output.content_type, output.url);
-      const relative = path.join('raw', rawName, `${sanitize(slot)}.${extension}`);
-      const target = path.join(outDir, relative);
-      writeFileAtomic(target, buffer);
-      files.set(slot, buffer);
-      saved.set(slot, { file: target, relative, contentType: output.content_type ?? null, assetId: output.output_asset_id ?? null });
-      log(`  saved ${path.relative(outDir, target)} (${buffer.length} bytes)`);
-    }
+  try {
+    journal.transition(job.id, 'submitted', { jobId: submitted.job_id, metadata: { recipeFingerprint: planEntry.recipeFingerprint } });
+  } catch (error) {
+    const persisted = new Error(`job ${submitted.job_id} was accepted but its id could not be persisted: ${error.message}. Stop and preserve this job id; do not resubmit.`);
+    persisted.jobId = submitted.job_id;
+    throw persisted;
   }
-  if (response.result !== undefined && response.result !== null) {
-    const relative = path.join('raw', rawName, 'result.json');
-    writeFileAtomic(path.join(outDir, relative), `${JSON.stringify(response.result, null, 2)}\n`);
+  journal.transition(job.id, 'polling', { jobId: submitted.job_id });
+  try {
+    await api.waitForJob(submitted.job_id, { log, signal });
+    journal.transition(job.id, 'completed', { jobId: submitted.job_id });
+    return await api.jobResult(submitted.job_id, { signal });
+  } catch (error) {
+    const terminal = error?.status === 'failed' || error?.status === 'cancelled';
+    journal.transition(job.id, terminal ? 'remote-failed' : 'local-failed', { jobId: submitted.job_id, detail: terminal ? String(error.status) : 'polling or result retrieval failed' });
+    throw error;
   }
-  return { files, saved, rawDir };
 }
 
 function writeBackJobIds({ config, configFile, writeBack, log }) {
@@ -246,10 +246,13 @@ function writeBackJobIds({ config, configFile, writeBack, log }) {
  *   config: object, configFile?: string|null, configDir?: string,
  *   outDir?: string, key?: string|null, env?: object, base?: string,
  *   only?: string|string[]|null, force?: boolean, dry?: boolean,
+ *   approveSpend?: string|null, breakLock?: boolean,
  *   strict?: boolean, writeBack?: boolean, log?: (message: string) => void,
  *   fetchImpl?: typeof fetch, sleepImpl?: (ms: number) => Promise<void>,
  *   nowImpl?: () => number, randomImpl?: () => number,
- *   maxApiResponseBytes?: number, maxDownloadBytes?: number,
+ *   maxApiResponseBytes?: number, maxDownloadBytes?: number, maxUploadBytes?: number,
+ *   requestTimeoutMs?: number, uploadTimeoutMs?: number, downloadTimeoutMs?: number,
+ *   signal?: AbortSignal,
  * }} options
  */
 export async function runConfig(options = {}) {
@@ -266,7 +269,6 @@ export async function runConfig(options = {}) {
     log = () => {},
   } = options;
 
-  const jobs = selectJobs(config, only);
   const bakers = resolveBakers(config);
   const generatorRegistry = { ...builtinGenerators, ...(config.generators || {}) };
   const version = config.version ?? 1;
@@ -274,108 +276,221 @@ export async function runConfig(options = {}) {
   const records = [];
   const provenance = {};
   const failures = [];
-  const plan = [];
   let recordedJobIds = false;
   let recordedAssetIds = false;
   const runAssets = new Map();
   const baseUrl = resolveBaseUrl({ base: options.base, configBaseUrl: config.baseUrl, env });
-  const api = dry
-    ? null
-    : createApi({ baseUrl, key: options.key ?? null, env, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl, nowImpl: options.nowImpl, randomImpl: options.randomImpl, maxApiResponseBytes: options.maxApiResponseBytes, maxDownloadBytes: options.maxDownloadBytes, log });
-
-  for (const job of jobs) {
-    if (job.enabled === false) {
-      log(`- ${job.id}: disabled`);
-      plan.push({ id: job.id, engine: job.engine, action: 'disabled' });
-      continue;
-    }
-    const rawName = job.raw || job.id;
-    const inputs = job.inputs ?? job.input ?? {};
-    const bakeType = job.bake?.type ?? null;
-    if (dry) {
-      const action = job.recorded && !force ? 'recorded' : job.jobId && !force ? 'reuse' : 'submit';
-      plan.push({ id: job.id, engine: job.engine, action, baker: bakeType, raw: rawName });
-      const what = action === 'recorded' ? 'read the recorded fixture' : action === 'reuse' ? `reuse job ${job.jobId}` : 'submit to the API';
-      log(`> ${job.id} (${job.engine}) — would ${what}${bakeType ? `, bake ${bakeType}` : ''}`);
-      continue;
-    }
-    log(`\n> ${job.id} (${job.engine})`);
-    try {
-      let response;
-      if (job.recorded && !force) {
-        log('  using recorded fixture');
-        response = loadRecorded(job, configDir);
-      } else {
-        if (!options.key) {
-          throw new Error(`MOTH_API_KEY is required to run live job "${job.id}" (set it, or add a "recorded" block for offline runs)`);
-        }
-        const previousJobId = job.jobId;
-        response = await resolveLiveResult({ api, job, inputs, inputFrom: job.inputFrom, config, runAssets, configDir, outDir, force, log, generatorRegistry });
-        if (job.jobId && job.jobId !== previousJobId) recordedJobIds = true;
-      }
-      const { files, saved } = await saveResponse({ response, api, outDir, rawName, log });
-      const assetIds = {};
-      for (const [slot, entry] of saved) if (entry.assetId) assetIds[slot] = entry.assetId;
-      runAssets.set(job.id, { assetIds, saved });
-      if (Object.keys(assetIds).length) {
-        const before = job.assetIds ? JSON.stringify(job.assetIds) : null;
-        job.assetIds = assetIds;
-        if (JSON.stringify(assetIds) !== before) recordedAssetIds = true;
-      }
-      if (bakeType) {
-        const baker = bakers[bakeType];
-        if (!baker) throw new Error(`unknown baker: ${bakeType}`);
-        const fragment = baker(job, {
-          files,
-          saved,
-          result: response.result,
-          bake: job.bake,
-          job,
-          rawName,
-          outDir,
-          configDir,
-          log,
-        });
-        const record = { job: job.id, type: bakeType, ...fragment };
-        records.push(record);
-        log(`  baked ${record.bucket}.${record.key}${record.merge === 'frames' ? `[${record.index ?? 0}]` : ''}`);
-      }
-      provenance[job.id] = {
-        engine: job.engine,
-        jobId: job.jobId || null,
-        // A requested mode is not evidence of the backend actually used.
-        // In particular, an omitted mode must not become an invented "emu".
-        mode: job.mode ?? job.params?.mode ?? null,
-        name: job.bake?.name ?? null,
-        credits: job.credits ?? null,
-      };
-      if (Object.keys(assetIds).length) provenance[job.id].outputs = assetIds;
-      plan.push({ id: job.id, engine: job.engine, action: 'ran', jobId: job.jobId ?? null, baker: bakeType });
-    } catch (error) {
-      log(`  FAILED: ${error.message}`);
-      failures.push({ id: job.id, engine: job.engine, message: error.message });
-      if (strict) throw error;
-    }
-  }
+  const initialJournal = readRunJournal(outDir);
+  let executionPlan = buildExecutionPlan({ config, configDir, outDir, only, force, baseUrl, journalSnapshot: initialJournal });
 
   if (dry) {
-    return { dry: true, records, provenance, failures, written: [], plan, buckets: summarizeRecords(records) };
+    for (const entry of executionPlan.jobs) {
+      const descriptions = {
+        recorded: 'read the recorded fixture',
+        'archive-rebuild': 'verify the raw archive and rebuild locally',
+        resume: `resume job ${entry.jobId}`,
+        'legacy-reuse': `check unverified legacy job ${entry.jobId}`,
+        'blocked-unknown-submission': 'stop for manual reconciliation of an ambiguous submit',
+        'blocked-archive-conflict': 'stop because the raw archive is immutable',
+         submit: 'submit to the API after explicit spending approval',
+          'blocked-recipe-conflict': 'stop because journal recipe provenance differs',
+      };
+      log(`> ${entry.id} (${entry.engine}) — would ${descriptions[entry.action]}${entry.baker ? `, bake ${entry.baker}` : ''}`);
+    }
+    return { dry: true, records, provenance, failures, written: [], plan: executionPlan.jobs, executionPlan, buckets: summarizeRecords(records) };
   }
 
-  let written = [];
-  if (records.length) {
-    written = await runEmitters({ config, records, outDir, provenance, version, generator, log });
+  // Fail before any local writes when a new paid plan has not been approved.
+  assertSpendApproved(executionPlan, options.approveSpend ?? null);
+  const journal = openRunJournal(outDir, {
+    breakLock: options.breakLock ?? false,
+    ...(options.journalOptions ?? {}),
+  });
+  try {
+    // Re-plan under the writer lock so a changed resume state invalidates a
+    // stale approval rather than being raced into execution.
+    executionPlan = buildExecutionPlan({ config, configDir, outDir, only, force, baseUrl, journalSnapshot: journal.snapshot() });
+    assertSpendApproved(executionPlan, options.approveSpend ?? null);
+    const graph = buildJobGraph(config, { only });
+    const jobsById = new Map(graph.jobs.map((job) => [job.id, job]));
+    const api = createApi({ baseUrl, key: options.key ?? null, env, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl, nowImpl: options.nowImpl, randomImpl: options.randomImpl, maxApiResponseBytes: options.maxApiResponseBytes, maxDownloadBytes: options.maxDownloadBytes, maxUploadBytes: options.maxUploadBytes, requestTimeoutMs: options.requestTimeoutMs, uploadTimeoutMs: options.uploadTimeoutMs, downloadTimeoutMs: options.downloadTimeoutMs, log });
+    const bakedJobs = [];
+
+    for (const planEntry of executionPlan.jobs) {
+      assertNotAborted(options.signal);
+      const job = jobsById.get(planEntry.id);
+      const rawName = job.raw || job.id;
+      const inputs = job.inputs ?? job.input ?? {};
+      const jobBakeSpecs = bakeSpecs(job);
+      log(`\n> ${job.id} (${job.engine}) — ${planEntry.action}`);
+      try {
+        assertNotAborted(options.signal);
+        if (planEntry.action.startsWith('blocked-')) {
+          const reason = planEntry.action === 'blocked-unknown-submission'
+            ? `job "${job.id}" has an unknown submission outcome; reconcile and attach a confirmed job id before any retry`
+            : planEntry.blockReason;
+          throw new Error(reason);
+        }
+        const metadata = {
+          recipeFingerprint: planEntry.recipeFingerprint,
+          bakeConfigFingerprint: planEntry.bakeConfigFingerprint,
+          exportConfigFingerprint: planEntry.exportConfigFingerprint,
+          verification: planEntry.verification,
+        };
+        const currentDependencies = {};
+        for (const [slot, dependency] of Object.entries(planEntry.dependencies)) {
+          const prior = runAssets.get(dependency.job);
+          if (!prior) throw new Error(`dependency ${dependency.job}/${dependency.slot} did not complete in this run`);
+          if (hashJson(prior.selectedIdentity) !== hashJson(dependency.selectedIdentity)) {
+            throw new Error(`dependency ${dependency.job}/${dependency.slot} selected generation changed; approval invalidated`);
+          }
+          currentDependencies[slot] = { ...dependency, actualGenerationFingerprint: prior.generationFingerprint, actualRawFingerprint: prior.rawFingerprint };
+        }
+        journal.transition(job.id, 'prepared', { jobId: planEntry.jobId ?? undefined, metadata: { ...metadata, dependencies: currentDependencies } });
+
+        let archived;
+        let generationFingerprint;
+        if (planEntry.action === 'archive-rebuild') {
+          archived = readArchive({ outDir, rawName, job, requireVerified: true });
+          if (archived.manifest.recipeFingerprint !== planEntry.recipeFingerprint) {
+            throw new Error(`raw/${rawName}: archived recipe no longer matches the current generation recipe`);
+          }
+          generationFingerprint = archived.manifest.generationFingerprint;
+          if (generationFingerprint !== planEntry.selectedIdentity.generationFingerprint || archived.rawFingerprint !== planEntry.selectedIdentity.rawFingerprint) {
+            throw new Error(`raw/${rawName}: selected generation changed after planning; approval invalidated`);
+          }
+          if (archived.manifest.jobId) job.jobId = archived.manifest.jobId;
+          log(`  verified archived result ${archived.rawFingerprint}`);
+        } else {
+          let response;
+          if (planEntry.action === 'recorded') {
+            log('  using recorded fixture');
+            for (const [slot, relative] of Object.entries(job.recorded.outputs ?? {})) {
+              const file = path.resolve(configDir, relative);
+              if (fs.existsSync(file) && hashFile(file) !== planEntry.recorded.outputs[slot]) throw new Error(`recorded fixture changed after planning: ${job.id}/${slot}`);
+            }
+            if (typeof job.recorded.result === 'string') {
+              const file = path.resolve(configDir, job.recorded.result);
+              if (fs.existsSync(file) && hashFile(file) !== planEntry.recorded.result) throw new Error(`recorded fixture changed after planning: ${job.id}/result`);
+            } else if (job.recorded.result !== undefined && hashJson(job.recorded.result) !== planEntry.recorded.result) throw new Error(`recorded fixture changed after planning: ${job.id}/result`);
+            response = loadRecorded(job, configDir);
+            generationFingerprint = generationInstanceFingerprint({ recipe: planEntry.recipeFingerprint, jobId: `recorded:${job.id}`, fixture: recordedFixtureFingerprint(planEntry.recorded) });
+          } else {
+            if (!options.key) throw new Error(`MOTH_API_KEY is required to ${planEntry.action === 'submit' ? 'submit' : 'resume'} live job "${job.id}"`);
+            const previousJobId = job.jobId;
+            response = await resolveLiveResult({ api, job, inputs, inputFrom: job.inputFrom, config, runAssets, configDir, outDir, log, generatorRegistry, journal, planEntry, signal: options.signal });
+            if (job.jobId && job.jobId !== previousJobId) recordedJobIds = true;
+            generationFingerprint = generationInstanceFingerprint({ recipe: planEntry.recipeFingerprint, jobId: job.jobId });
+          }
+          archived = await archiveResponse({
+            response,
+            api,
+            outDir,
+            rawName,
+            recipeFingerprint: planEntry.recipeFingerprint,
+            generationFingerprint,
+            jobId: job.jobId ?? null,
+            engine: job.engine,
+            verification: planEntry.verification,
+            signal: options.signal,
+            log,
+          });
+        }
+        assertNotAborted(options.signal);
+        const { files, saved } = archived;
+        journal.transition(job.id, 'downloaded', {
+          jobId: job.jobId ?? undefined,
+          metadata: { ...metadata, generationFingerprint, rawFingerprint: archived.rawFingerprint },
+        });
+        const assetIds = {};
+        for (const [slot, entry] of saved) if (entry.assetId) assetIds[slot] = entry.assetId;
+        runAssets.set(job.id, { assetIds, saved, generationFingerprint, rawFingerprint: archived.rawFingerprint, selectedIdentity: planEntry.selectedIdentity });
+        if (Object.keys(assetIds).length) {
+          const before = job.assetIds ? JSON.stringify(job.assetIds) : null;
+          job.assetIds = assetIds;
+          if (JSON.stringify(assetIds) !== before) recordedAssetIds = true;
+        }
+
+        let bakeFingerprint = null;
+        if (jobBakeSpecs.length) {
+          const fingerprints = [];
+          for (const bake of jobBakeSpecs) {
+            assertNotAborted(options.signal);
+            const bakeType = bake.type;
+            const baker = bakers[bakeType];
+            if (!baker) throw new Error(`unknown baker: ${bakeType}`);
+            const fragment = baker(job, { files, saved, result: archived.result, bake, job, rawName, outDir, configDir, log });
+            const record = { job: job.id, type: bakeType, ...fragment };
+            records.push(record);
+            fingerprints.push(localBakeFingerprint({ raw: archived.rawFingerprint, bake: { implementation: IMPLEMENTATION_ID, options: bake } }));
+            log(`  baked ${record.bucket}.${record.key}${record.merge === 'frames' ? `[${record.index ?? 0}]` : ''}`);
+          }
+          bakeFingerprint = fingerprints.length === 1 ? fingerprints[0] : localBakeFingerprint({ raw: archived.rawFingerprint, bake: { implementation: IMPLEMENTATION_ID, outputs: fingerprints } });
+          journal.transition(job.id, 'baked', { metadata: { bakeFingerprint } });
+        }
+        provenance[job.id] = {
+          engine: job.engine,
+          engineVersion: job.engineVersion ?? null,
+          jobId: job.jobId || null,
+          requestedMode: job.mode ?? job.params?.mode ?? null,
+          mode: job.mode ?? job.params?.mode ?? null,
+          actualBackend: null,
+          name: jobBakeSpecs.length === 1 ? jobBakeSpecs[0].name ?? null : null,
+          names: jobBakeSpecs.map((bake) => bake.name ?? null),
+          estimatedCredits: job.credits ?? null,
+          credits: job.credits ?? null,
+          verification: planEntry.verification,
+          recipeFingerprint: planEntry.recipeFingerprint,
+          generationFingerprint,
+          rawFingerprint: archived.rawFingerprint,
+          bakeFingerprint,
+        };
+        if (Object.keys(assetIds).length) provenance[job.id].outputs = assetIds;
+        bakedJobs.push({ job, bakeFingerprint, planEntry });
+      } catch (error) {
+        const current = journal.get(job.id);
+        if (current && !['unknown-submission', 'remote-failed', 'local-failed'].includes(current.state)) {
+          journal.transition(job.id, 'local-failed', {
+            detail: error?.assetId ? `asset operation uncertain for ${error.assetId}` : 'local execution stage failed',
+            metadata: error?.assetId ? { ambiguousAssetId: error.assetId } : undefined,
+          });
+        }
+        log(`  FAILED: ${error.message}`);
+        failures.push({ id: job.id, engine: job.engine, message: error.message });
+        if (strict || options.signal?.aborted) throw error;
+      }
+    }
+
+    let written = [];
+    if (records.length) {
+      try {
+        assertNotAborted(options.signal);
+        written = await runEmitters({ config, records, outDir, provenance, version, generator, log });
+        assertNotAborted(options.signal);
+        for (const { job, bakeFingerprint, planEntry } of bakedJobs) {
+          const publishedFingerprint = exportFingerprint({ bake: bakeFingerprint ?? planEntry.recipeFingerprint, emitter: { configFingerprint: planEntry.exportConfigFingerprint } });
+          journal.transition(job.id, 'published', { metadata: { exportFingerprint: publishedFingerprint } });
+          provenance[job.id].exportFingerprint = publishedFingerprint;
+        }
+      } catch (error) {
+        for (const { job } of bakedJobs) journal.transition(job.id, 'local-failed', { detail: 'emitter publication failed' });
+        throw error;
+      }
+    }
+    const updatedConfig = (recordedJobIds || recordedAssetIds) && writeBackJobIds({ config, configFile, writeBack: options.writeBack, log });
+    return {
+      dry: false,
+      records,
+      provenance,
+      failures,
+      written,
+      plan: executionPlan.jobs,
+      executionPlan,
+      buckets: summarizeRecords(records),
+      outDir,
+      updatedConfig,
+    };
+  } finally {
+    journal.close();
   }
-  const updatedConfig = (recordedJobIds || recordedAssetIds) && writeBackJobIds({ config, configFile, writeBack: options.writeBack, log });
-  return {
-    dry: false,
-    records,
-    provenance,
-    failures,
-    written,
-    plan,
-    buckets: summarizeRecords(records),
-    outDir,
-    updatedConfig,
-  };
 }

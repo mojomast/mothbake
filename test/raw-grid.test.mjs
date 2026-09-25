@@ -32,5 +32,5 @@ test('recorded raw-grid emits exact numbers and retains original result separate
   assert.deepEqual(result.failures, []);
   const baked = JSON.parse(fs.readFileSync(path.join(outDir, 'baked.json'), 'utf8'));
   assert.deepEqual(baked.grids.field.values, [[0, 8], [1, 2]]);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(outDir, 'raw/field/result.json'), 'utf8')).provenance, { backend: 'unknown' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(outDir, 'raw/field/inline-result.json'), 'utf8')).provenance, { backend: 'unknown' });
 });

@@ -15,6 +15,7 @@ export function bake(job, ctx) {
     throw new Error(`${type}: unexpected result shape (need grid_size and coupling_map)`);
   }
   const { rows, cols } = output.grid_size;
+  if (!Number.isInteger(rows) || rows <= 0 || !Number.isInteger(cols) || cols <= 0) throw new Error(`${type}: grid_size rows/cols must be positive integers`);
   const maxMeasurements = options.maxMeasurements ?? 8;
   const cells = Array.from({ length: rows * cols }, (_, i) => {
     const state = output.initial_states?.[String(i)] || {};
@@ -29,6 +30,28 @@ export function bake(job, ctx) {
   const coupling = (output.coupling_map || [])
     .map(([a, b]) => [a, b])
     .sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const nodeCount = rows * cols;
+  for (const [a, b] of coupling) {
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a >= nodeCount || b >= nodeCount || a === b) {
+      throw new Error(`${type}: coupling contains an invalid node pair [${a}, ${b}] for ${nodeCount} cells`);
+    }
+  }
+  const adjacency = Array.from({ length: nodeCount }, () => []);
+  for (const [a, b] of coupling) { adjacency[a].push(b); adjacency[b].push(a); }
+  const components = [];
+  const visited = new Set();
+  for (let start = 0; start < nodeCount; start++) {
+    if (visited.has(start)) continue;
+    const queue = [start];
+    const nodes = [];
+    visited.add(start);
+    while (queue.length) {
+      const node = queue.shift();
+      nodes.push(node);
+      for (const next of adjacency[node]) if (!visited.has(next)) { visited.add(next); queue.push(next); }
+    }
+    components.push(nodes.sort((a, b) => a - b));
+  }
   const measurements = (output.results?.measurements || [])
     .slice(0, maxMeasurements)
     .map((m) => ({ bits: m.bitstring, probability: round6(m.probability || 0) }));
@@ -45,10 +68,21 @@ export function bake(job, ctx) {
       measurements,
       metrics: {
         szSamp: round6(output.metrics?.sz_samp || 0),
-        mode: output.metrics?.mode || 'emu',
-        backend: output.metrics?.backend || 'aer',
+        mode: output.metrics?.mode ?? null,
+        backend: output.metrics?.backend ?? null,
         shots: output.metrics?.shots ?? 0,
       },
+      diagnostics: {
+        connected: components.length === 1,
+        componentCount: components.length,
+        components,
+        reachableFromZero: components.find((nodes) => nodes.includes(0))?.length ?? 0,
+        disconnectedCells: nodeCount - (components.find((nodes) => nodes.includes(0))?.length ?? 0),
+        radiatingReachable: cells.filter((cell) => cell.radiating && components.find((nodes) => nodes.includes(0))?.includes(cell.i)).map((cell) => cell.i),
+      },
+      playable: false,
+      experimental: true,
+      limitation: 'Graph connectivity is validated, but collision, traversal and placement constraints require a real consumer integration.',
     },
   };
 }

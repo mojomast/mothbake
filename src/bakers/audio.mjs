@@ -7,7 +7,11 @@
 // randomness, no consumer-specific shape.
 
 import { encodeWav } from '../decoders/wav.mjs';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { toBase64 } from '../image.mjs';
+import { writeFileAtomic } from '../publish.mjs';
 import { resolveUrl } from './util.mjs';
 
 export { resolveUrl };
@@ -107,6 +111,51 @@ export function resampleLinear(channelData, fromRate, toRate) {
 }
 
 /**
+ * Windowed-sinc production resampler. Downsampling applies an explicit low-pass
+ * cutoff at the target Nyquist frequency; upsampling reconstructs at the source
+ * Nyquist frequency. A finite Hann-windowed kernel keeps the dependency-free
+ * path deterministic while avoiding the unfiltered aliasing of resampleLinear.
+ */
+export function resampleFiltered(channelData, fromRate, toRate, options = {}) {
+  if (fromRate === toRate) return channelData;
+  const radius = options.radius ?? 24;
+  if (!Number.isInteger(radius) || radius < 8 || radius > 64) throw new TypeError('audio production resampler radius must be an integer from 8 to 64');
+  const frames = channelData[0].length;
+  const outFrames = Math.max(1, Math.round((frames * toRate) / fromRate));
+  const step = fromRate / toRate;
+  const cutoff = Math.min(1, toRate / fromRate);
+  const sinc = (x) => Math.abs(x) < 1e-12 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+  return channelData.map((channel) => {
+    const out = new Float32Array(outFrames);
+    for (let index = 0; index < outFrames; index++) {
+      const center = index * step;
+      const first = Math.max(0, Math.floor(center) - radius + 1);
+      const last = Math.min(frames - 1, Math.floor(center) + radius);
+      let sum = 0;
+      let weightSum = 0;
+      for (let source = first; source <= last; source++) {
+        const distance = source - center;
+        const normalized = Math.abs(distance) / radius;
+        if (normalized >= 1) continue;
+        const window = 0.5 + 0.5 * Math.cos(Math.PI * normalized);
+        const weight = cutoff * sinc(cutoff * distance) * window;
+        sum += channel[source] * weight;
+        weightSum += weight;
+      }
+      out[index] = weightSum ? clamp(sum / weightSum, -1, 1) : 0;
+    }
+    return out;
+  });
+}
+
+/** Select an explicit preview or production resampling path. */
+export function resampleChannels(channelData, fromRate, toRate, quality = 'preview') {
+  if (quality === 'preview') return resampleLinear(channelData, fromRate, toRate);
+  if (quality === 'production') return resampleFiltered(channelData, fromRate, toRate);
+  throw new Error(`audio.resampleQuality "${quality}" unsupported (expected preview or production)`);
+}
+
+/**
  * Deterministic loop-seam finder. Compares a short head window with candidate
  * windows ending near the tail, scoring seam continuity with an
  * amplitude-aware normalized difference (`1 - Σ(a-b)² / (Σa² + Σb²)`), not a
@@ -180,8 +229,8 @@ export function crossfadeAtSeam(channelData, loopStartFrame, loopEndFrame, fadeF
 
 /**
  * Encode the channels and build the portable audio value shared by
- * `audio-clip` and `audio-stitch`. `data` is base64 by default; `embed: false`
- * omits it and references the saved raw output through `file`/`url` instead.
+ * `audio-clip` and `audio-stitch`. Both modes use the same encoded WAV bytes;
+ * external mode publishes a derived artifact, never the archived raw input.
  */
 export function encodeAndDescribe({ channels, sampleRate, sampleFormat, gain, peak, loopStart, loopEnd, loopScore, crossfade, options, ctx, slot, type }) {
   if (!SAMPLE_FORMATS.has(sampleFormat)) {
@@ -190,12 +239,20 @@ export function encodeAndDescribe({ channels, sampleRate, sampleFormat, gain, pe
   const frames = channels[0].length;
   const seconds = frames / sampleRate;
   const embed = options.embed !== false;
-  const relative = slot ? ctx.saved?.get(slot)?.relative ?? null : null;
-  const file = typeof options.file === 'string' ? options.file : embed ? null : relative;
-  if (!embed && !file) {
-    throw new Error(`${type}: embed:false needs a referenceable output slot (slot "${slot}" has none); set bake.file to override`);
+  const wav = encodeWav(channels, { sampleRate, format: sampleFormat });
+  const sha256 = createHash('sha256').update(wav).digest('hex');
+  const explicit = options.file;
+  if (explicit !== undefined && (typeof explicit !== 'string' || !explicit)) {
+    throw new Error(`${type}.file must be a relative WAV path inside outDir`);
   }
-  const url = resolveUrl(options, ctx, slot);
+  const file = explicit ?? `processed/audio/${sha256}.wav`;
+  if (explicit !== undefined || !embed) validateDerivedPath(ctx.outDir, file, type);
+  if (!embed) writeDerivedWav(ctx.outDir, file, wav, type);
+  // resolveUrl implements the common {raw}/{slot}/{file} and urlBase rules;
+  // supply the derived path rather than the raw slot's saved path.
+  const url = embed
+    ? resolveUrl(options, ctx, slot)
+    : resolveUrl({ ...options, file }, { ...ctx, saved: new Map() }, slot ?? 'result');
   const value = {
     container: 'wav',
     format: sampleFormat.startsWith('float') ? 'float' : 'pcm',
@@ -205,8 +262,12 @@ export function encodeAndDescribe({ channels, sampleRate, sampleFormat, gain, pe
     frames,
     seconds: round(seconds),
   };
-  if (embed) value.data = toBase64(encodeWav(channels, { sampleRate, format: sampleFormat }));
-  else value.file = file;
+  if (embed) value.data = toBase64(wav);
+  else {
+    value.file = file;
+    value.sha256 = sha256;
+    value.bytes = wav.length;
+  }
   if (url !== null) value.url = url;
   value.loopStart = loopStart;
   value.loopEnd = loopEnd;
@@ -216,4 +277,39 @@ export function encodeAndDescribe({ channels, sampleRate, sampleFormat, gain, pe
   value.peak = round(peak);
   if (options.meta !== undefined && options.meta !== null) value.meta = options.meta;
   return value;
+}
+
+/** Reject traversal and symlinks at every existing component, including outDir. */
+function validateDerivedPath(outDir, relative, type) {
+  if (typeof outDir !== 'string' || !outDir) throw new Error(`${type}: embed:false needs outDir`);
+  if (path.isAbsolute(relative) || path.win32.isAbsolute(relative) || relative.includes('\\') ||
+      relative.split('/').some((part) => !part || part === '.' || part === '..') ||
+      relative.split('/')[0].toLowerCase() === 'raw' || !relative.toLowerCase().endsWith('.wav')) {
+    throw new Error(`${type}.file must be a relative WAV path inside outDir, outside raw/`);
+  }
+  const root = path.resolve(outDir);
+  const check = (target) => {
+    try {
+      if (fs.lstatSync(target).isSymbolicLink()) throw new Error(`${type}.file symlink escapes or redirects outDir: ${target}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  };
+  let current = path.parse(root).root;
+  for (const part of path.relative(current, root).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    check(current);
+  }
+  for (const part of relative.split('/')) {
+    current = path.join(current, part);
+    check(current);
+  }
+  return current;
+}
+
+function writeDerivedWav(outDir, relative, wav, type) {
+  const target = validateDerivedPath(outDir, relative, type);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  validateDerivedPath(outDir, relative, type);
+  writeFileAtomic(target, wav);
 }

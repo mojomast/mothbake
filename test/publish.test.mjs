@@ -287,7 +287,7 @@ test('failed jobs keep their previous records and a run with no records writes n
     engine: 'blur-v1',
     raw: 'sky',
     recorded: { outputs: { result: fixture('sky.png') } },
-    bake: { type: 'sky', name: 'nebula', width: 8, height: 4 },
+    bake: { type: 'sky', name: 'nebula', width: 8, height: 4, sourceProjection: 'equirectangular' },
   };
   const config = { version: 1, jobs: [tileJob, skyJob], emitters };
   const first = await runConfig({ config, configDir: dir, outDir, log: () => {} });

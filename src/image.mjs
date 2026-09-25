@@ -16,6 +16,46 @@ export function resizeNearest(data, sourceWidth, sourceHeight, targetWidth, targ
   return out;
 }
 
+/** Bilinear resample for continuous-tone images; nearest remains explicit for pixel art. */
+export function resizeBilinear(data, sourceWidth, sourceHeight, targetWidth, targetHeight, channels = 4) {
+  const out = new Uint8Array(targetWidth * targetHeight * channels);
+  for (let y = 0; y < targetHeight; y++) {
+    const sy = targetHeight === 1 ? 0 : (y * (sourceHeight - 1)) / (targetHeight - 1);
+    const y0 = Math.floor(sy), y1 = Math.min(sourceHeight - 1, y0 + 1), fy = sy - y0;
+    for (let x = 0; x < targetWidth; x++) {
+      const sx = targetWidth === 1 ? 0 : (x * (sourceWidth - 1)) / (targetWidth - 1);
+      const x0 = Math.floor(sx), x1 = Math.min(sourceWidth - 1, x0 + 1), fx = sx - x0;
+      for (let channel = 0; channel < channels; channel++) {
+        const at = (px, py) => data[(py * sourceWidth + px) * channels + channel];
+        const top = at(x0, y0) * (1 - fx) + at(x1, y0) * fx;
+        const bottom = at(x0, y1) * (1 - fx) + at(x1, y1) * fx;
+        out[(y * targetWidth + x) * channels + channel] = Math.round(top * (1 - fy) + bottom * fy);
+      }
+    }
+  }
+  return out;
+}
+
+/** Measure opposite-edge and corner discontinuity; this diagnoses, not repairs, seams. */
+export function boundaryContinuity(data, width, height, channels = 4) {
+  const differences = [];
+  const compare = (a, b) => {
+    for (let channel = 0; channel < Math.min(3, channels); channel++) differences.push(Math.abs(data[a + channel] - data[b + channel]) / 255);
+  };
+  for (let y = 0; y < height; y++) compare((y * width) * channels, (y * width + width - 1) * channels);
+  for (let x = 0; x < width; x++) compare(x * channels, ((height - 1) * width + x) * channels);
+  const corners = [
+    0,
+    (width - 1) * channels,
+    ((height - 1) * width) * channels,
+    ((height * width) - 1) * channels,
+  ];
+  for (let index = 1; index < corners.length; index++) compare(corners[0], corners[index]);
+  const mean = differences.reduce((sum, value) => sum + value, 0) / (differences.length || 1);
+  const max = differences.reduce((value, item) => Math.max(value, item), 0);
+  return { mean: Math.round(mean * 1e6) / 1e6, max: Math.round(max * 1e6) / 1e6, exact: max === 0 };
+}
+
 /** Tone-map a decoded HDR image down to `size` x `size` 8-bit RGB. */
 export function hdrToRgb8(hdr, size) {
   const small = resizeNearest(hdr.data, hdr.width, hdr.height, size, size, 3);

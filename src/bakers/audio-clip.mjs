@@ -4,7 +4,7 @@
 // trims leading/trailing silence, resamples, normalises the peak, finds a loop
 // seam, re-encodes a WAV and emits a portable record. By default the WAV is
 // embedded as base64 (`{}` is small); for beds and other large clips set
-// `embed: false` to emit a `file` reference instead, exactly like `ir`.
+// `embed: false` to write a processed WAV and emit its `file` reference.
 //
 // Defaults:
 //   - `trim: true` removes leading/trailing silence below `threshold`
@@ -24,11 +24,13 @@
 //   - `loopCrossfade` (seconds) equal-power blends the tail into the head at
 //     the seam so the loop is continuous.
 //   - `targetSampleRate`/`maxSeconds` decimate/trim so beds stay small.
-//   - `embed: false` plus `url`/`urlBase` emits a file reference, not base64.
+//   - `embed: false` writes the encoded WAV under `outDir` and emits a file
+//     reference; `file` can override its derived path, `url`/`urlBase` its URL.
 //   - `meta` is copied into the record verbatim (routing hints, tags, …).
 
 import { decodeWav, mixdownChannels } from '../decoders/wav.mjs';
 import { requireFile } from './util.mjs';
+import { analyzeAudioQuality } from '../audio-quality.mjs';
 import {
   autoTrim,
   clamp,
@@ -38,7 +40,7 @@ import {
   limitFrames,
   optionalNumber,
   peakOf,
-  resampleLinear,
+  resampleChannels,
   round,
   scaleChannels,
 } from './audio.mjs';
@@ -81,7 +83,7 @@ export function bake(job, ctx) {
   const targetSampleRate = optionalNumber(options.targetSampleRate, `${type}.targetSampleRate`);
   if (targetSampleRate !== null) {
     if (!(targetSampleRate > 0)) throw new Error(`${type}.targetSampleRate must be a positive number`);
-    channels = resampleLinear(channels, sampleRate, targetSampleRate);
+    channels = resampleChannels(channels, sampleRate, targetSampleRate, options.resampleQuality ?? 'preview');
     sampleRate = targetSampleRate;
   }
   const maxSeconds = optionalNumber(options.maxSeconds, `${type}.maxSeconds`);
@@ -150,6 +152,7 @@ export function bake(job, ctx) {
   value.trimStart = round(start / sourceSampleRate);
   value.trimEnd = round(end / sourceSampleRate);
   if (targetSampleRate !== null) value.targetSampleRate = targetSampleRate;
+  if (targetSampleRate !== null) value.resampleQuality = options.resampleQuality ?? 'preview';
   value.source = {
     sampleRate: sourceSampleRate,
     channels: decoded.channels,
@@ -158,6 +161,12 @@ export function bake(job, ctx) {
     frames: inputFrames,
     seconds: round(inputFrames / sourceSampleRate),
   };
+  value.qualityReport = analyzeAudioQuality(channels, sampleRate, {
+    category: options.category ?? options.meta?.category ?? 'generic',
+    loopStart,
+    loopEnd,
+    normalized: options.normalize !== false,
+  });
 
   return {
     bucket: options.bucket ?? defaultBucket,

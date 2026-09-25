@@ -301,3 +301,31 @@ test('files emitter writes sprite-sheet atlases and audio clips', async (t) => {
   const index = JSON.parse(fs.readFileSync(path.join(outDir, 'index.json'), 'utf8'));
   assert.deepEqual(index.files.map((file) => file.file), ['sprites/walk.png', 'audio/footstep.wav']);
 });
+
+test('external processed clips survive both file and audio-pack emission unchanged', async (t) => {
+  const source = readFixture('clip-padded.wav');
+  const bake = { type: 'audio-clip', name: 'processed', trim: false, targetSampleRate: 4000, maxSeconds: 0.05, normalize: true };
+  for (const emitter of ['files', 'audio-pack']) {
+    const outDir = makeTmpDir(t, `external-${emitter}`);
+    const raw = path.join(outDir, 'raw', 'clip', 'result.wav');
+    fs.mkdirSync(path.dirname(raw), { recursive: true });
+    fs.writeFileSync(raw, source);
+    const input = { files: { result: source }, saved: { result: { relative: 'raw/clip/result.wav', file: raw } }, outDir };
+    const embedded = bakers['audio-clip']({ id: 'clip' }, ctx({ ...input, bake }));
+    const external = bakers['audio-clip']({ id: 'clip' }, ctx({ ...input, bake: { ...bake, embed: false } }));
+    const expected = fromBase64(embedded.value.data);
+    assert.deepEqual(fs.readFileSync(path.join(outDir, external.value.file)), expected);
+    assert.deepEqual(fs.readFileSync(raw), source, 'the provider archive must remain unchanged');
+    await runEmitters({
+      config: { emitters: [{ type: emitter, dir: 'published' }] },
+      records: [{ job: 'clip', type: 'audio-clip', bucket: external.bucket, key: external.key, value: external.value }],
+      outDir,
+      log: () => {},
+    });
+    const published = fs.readFileSync(path.join(outDir, 'published', 'audio', 'processed.wav'));
+    assert.deepEqual(published, expected, `${emitter} must publish the transformed signal`);
+    const decoded = decodeWav(published, { mixdown: true });
+    assert.equal(decoded.sampleRate, external.value.sampleRate);
+    assert.equal(decoded.frames, external.value.frames);
+  }
+});

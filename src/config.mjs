@@ -19,6 +19,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { bakerTypes } from './bakers/index.mjs';
 import { emitterTypes } from './emitters/index.mjs';
+import { assertDestinationPath } from './emitters/files.mjs';
 import { generatorTypes } from './values.mjs';
 
 export const DEFAULT_CONFIG_FILES = ['mothbake.config.mjs', 'mothbake.config.js', 'mothbake.json'];
@@ -27,6 +28,7 @@ const CONFIG_KEYS = new Set([
   'version',
   'generator',
   'baseUrl',
+  'contractSnapshot',
   'jobs',
   'sources',
   'emitter',
@@ -34,12 +36,14 @@ const CONFIG_KEYS = new Set([
   'bakers',
   'generators',
   'writeBack',
+  'budget',
   'comment',
 ]);
 
 const JOB_KEYS = new Set([
   'id',
   'engine',
+  'engineVersion',
   'enabled',
   'jobId',
   'credits',
@@ -52,6 +56,7 @@ const JOB_KEYS = new Set([
   'generateValues',
   'raw',
   'bake',
+  'bakes',
   'recorded',
   'comment',
 ]);
@@ -118,11 +123,11 @@ export async function loadConfig(options = {}) {
   return { config, file: target, dir: path.dirname(target), format: 'module' };
 }
 
-const STRING_BAKE_KEYS = ['name', 'bucket', 'slot', 'tapsSlot', 'irSlot', 'file', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'sampleFormat'];
+const STRING_BAKE_KEYS = ['name', 'bucket', 'slot', 'tapsSlot', 'irSlot', 'file', 'reflectance', 'transmittance', 'url', 'urlBase', 'ramp', 'tint', 'effect', 'sampleFormat', 'resampleQuality', 'resample', 'sourceProjection', 'units', 'coordinateConvention', 'category'];
 const INTEGER_BAKE_KEYS = ['size', 'width', 'height', 'index', 'maxNotes', 'maxTaps', 'hexChars', 'maxMeasurements', 'maxWidth', 'maxChannels'];
 const NUMBER_BAKE_KEYS = ['fps', 'strength', 'transpose', 'threshold', 'pad', 'peak', 'loopStart', 'loopEnd', 'loopSearch', 'loopWindow', 'loopThreshold', 'loopCrossfade', 'targetSampleRate', 'maxSeconds', 'crossfadeMs'];
 const BOOLEAN_BAKE_KEYS = ['powerOfTwo', 'dedupe', 'trim', 'normalize', 'mixdown', 'embed', 'detectLoop', 'includeZ'];
-const ARRAY_BAKE_KEYS = ['slots', 'order', 'gains'];
+const ARRAY_BAKE_KEYS = ['slots', 'order', 'gains', 'axes'];
 const OBJECT_BAKE_KEYS = ['ramps', 'meta'];
 const KNOWN_BAKE_KEYS = new Set(['type', ...STRING_BAKE_KEYS, ...INTEGER_BAKE_KEYS, ...NUMBER_BAKE_KEYS, ...BOOLEAN_BAKE_KEYS, ...ARRAY_BAKE_KEYS, ...OBJECT_BAKE_KEYS]);
 
@@ -161,6 +166,12 @@ function validateBake(bake, at, context) {
   }
   if (bake.ramps !== undefined && !isPlainObject(bake.ramps)) error(`${at}.ramps`, 'bake.ramps must be an object of colour ramps');
   if (bake.meta !== undefined && !isPlainObject(bake.meta)) error(`${at}.meta`, 'bake.meta must be an object');
+  if (bake.resampleQuality !== undefined && !['preview', 'production'].includes(bake.resampleQuality)) {
+    error(`${at}.resampleQuality`, 'bake.resampleQuality must be "preview" or "production"');
+  }
+  if (bake.resample !== undefined && !['nearest', 'bilinear'].includes(bake.resample)) error(`${at}.resample`, 'bake.resample must be "nearest" or "bilinear"');
+  if (bake.sourceProjection !== undefined && bake.sourceProjection !== 'equirectangular') error(`${at}.sourceProjection`, 'only equirectangular sourceProjection is currently supported');
+  if (bake.category !== undefined && !['impact', 'ui', 'loop', 'ambience', 'impulse-response', 'generic'].includes(bake.category)) error(`${at}.category`, 'unsupported audio category');
   for (const key of Object.keys(bake)) {
     if (KNOWN_BAKE_KEYS.has(key)) continue;
     warn(`${at}.${key}`, `unknown bake option "${key}" (custom bakers may accept their own options)`);
@@ -183,10 +194,15 @@ function validateJob(job, at, context) {
   }
   const label = typeof id === 'string' && id ? ` ("${id}")` : '';
   if (typeof job.engine !== 'string' || !job.engine.trim()) error(`${at}.engine`, `engine must be a non-empty string${label}`);
+  if (job.engineVersion !== undefined && (typeof job.engineVersion !== 'string' || !job.engineVersion)) error(`${at}.engineVersion`, `engineVersion must be a non-empty string${label}`);
   if (job.enabled !== undefined && typeof job.enabled !== 'boolean') error(`${at}.enabled`, `enabled must be a boolean${label}`);
   if (job.jobId !== undefined && (typeof job.jobId !== 'string' || !job.jobId)) error(`${at}.jobId`, `jobId must be a non-empty string${label}`);
-  if (job.credits !== undefined && (typeof job.credits !== 'number' || !Number.isFinite(job.credits))) error(`${at}.credits`, `credits must be a number${label}`);
+  if (job.credits !== undefined && (typeof job.credits !== 'number' || !Number.isFinite(job.credits) || job.credits < 0)) error(`${at}.credits`, `credits must be a non-negative number${label}`);
   if (job.params !== undefined && !isPlainObject(job.params)) error(`${at}.params`, `params must be an object${label}`);
+  if (job.mode !== undefined && (typeof job.mode !== 'string' || !job.mode)) error(`${at}.mode`, `mode must be a non-empty string${label}`);
+  if (job.mode !== undefined && isPlainObject(job.params) && job.params.mode !== undefined) {
+    error(at, `set execution mode in job.mode or params.mode, not both${label}`);
+  }
   if (job.raw !== undefined && (typeof job.raw !== 'string' || !job.raw)) error(`${at}.raw`, `raw must be a non-empty string${label}`);
   if (job.input !== undefined && job.inputs !== undefined) warn(at, 'both "input" and "inputs" are present; "inputs" wins');
   const inputs = job.inputs ?? job.input;
@@ -232,7 +248,12 @@ function validateJob(job, at, context) {
       error(`${at}.generateValues.type`, `unknown generator "${job.generateValues.type}" (available: ${context.generators.join(', ')})`);
     }
   }
+  if (job.bake !== undefined && job.bakes !== undefined) error(at, `use bake or bakes, not both${label}`);
   if (job.bake !== undefined) validateBake(job.bake, `${at}.bake`, context);
+  if (job.bakes !== undefined) {
+    if (!Array.isArray(job.bakes) || !job.bakes.length) error(`${at}.bakes`, `bakes must be a non-empty array${label}`);
+    else job.bakes.forEach((bake, bakeIndex) => validateBake(bake, `${at}.bakes[${bakeIndex}]`, context));
+  }
   if (job.recorded !== undefined) {
     if (!isPlainObject(job.recorded)) {
       error(`${at}.recorded`, `recorded must be an object with outputs/result${label}`);
@@ -319,6 +340,20 @@ function validateEmitters(config, context) {
       error(`${at}.type`, `unknown emitter "${raw.type}" (available: ${emitterTypes.join(', ')})`);
     }
     if (raw.file !== undefined && (typeof raw.file !== 'string' || !raw.file)) error(`${at}.file`, 'emitter file must be a non-empty string');
+    if (['files', 'audio-pack', 'audio-pack-versioned'].includes(raw.type)) {
+      for (const [key, directory] of [['dir', true], ['indexFile', false], ['manifest', false]]) {
+        if (raw[key] === undefined || (key === 'manifest' && raw[key] === false)) continue;
+        if (key === 'indexFile' && raw.type !== 'files') continue;
+        if (key === 'manifest' && raw.type === 'files') continue;
+        try { assertDestinationPath(raw[key], `${at}.${key}`, { directory }); }
+        catch (cause) { error(`${at}.${key}`, cause.message); }
+      }
+      if (raw.type === 'audio-pack-versioned') {
+        if (raw.merge) error(`${at}.merge`, 'versioned audio pack requires complete records (merge is unsupported)');
+        if (raw.manifest !== undefined && raw.manifest !== 'manifest.json') error(`${at}.manifest`, 'versioned audio pack requires manifest.json');
+        if (raw.versionId !== undefined && (typeof raw.versionId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(raw.versionId))) error(`${at}.versionId`, 'invalid pack version id');
+      }
+    }
     if (raw.export !== undefined && typeof raw.export !== 'string') error(`${at}.export`, 'emitter export must be a string');
     if (raw.shape !== undefined && !['buckets', 'records'].includes(raw.shape)) error(`${at}.shape`, 'emitter shape must be "buckets" or "records"');
   });
@@ -355,16 +390,25 @@ export function validateConfig(config, options = {}) {
   if (config.baseUrl !== undefined && (typeof config.baseUrl !== 'string' || !config.baseUrl)) {
     context.error('baseUrl', 'baseUrl must be a non-empty string');
   }
+  if (config.contractSnapshot !== undefined && (typeof config.contractSnapshot !== 'string' || !config.contractSnapshot)) context.error('contractSnapshot', 'contractSnapshot must be a non-empty path');
   if (config.writeBack !== undefined && typeof config.writeBack !== 'boolean') {
     context.error('writeBack', 'writeBack must be a boolean');
+  }
+  if (config.budget !== undefined) {
+    if (!isPlainObject(config.budget)) context.error('budget', 'budget must be an object');
+    else {
+      for (const key of Object.keys(config.budget)) if (!['maxEstimatedCredits', 'maxSubmissions', 'allowUnknownCost'].includes(key)) context.warn(`budget.${key}`, `unknown budget option "${key}"`);
+      if (config.budget.maxEstimatedCredits !== undefined && (typeof config.budget.maxEstimatedCredits !== 'number' || !Number.isFinite(config.budget.maxEstimatedCredits) || config.budget.maxEstimatedCredits < 0)) context.error('budget.maxEstimatedCredits', 'must be a non-negative number');
+      if (config.budget.maxSubmissions !== undefined && (!Number.isInteger(config.budget.maxSubmissions) || config.budget.maxSubmissions < 0)) context.error('budget.maxSubmissions', 'must be a non-negative integer');
+      if (config.budget.allowUnknownCost !== undefined && typeof config.budget.allowUnknownCost !== 'boolean') context.error('budget.allowUnknownCost', 'must be boolean');
+    }
   }
   if (!Array.isArray(config.jobs)) {
     context.error('jobs', 'jobs must be an array');
   } else {
     config.jobs.forEach((job, index) => validateJob(job, `jobs[${index}]`, context));
-    // `inputFrom` references another job's captured output asset. It resolves
-    // from the earlier job in this run, or from its persisted assetIds on a
-    // later run, so a forward reference is only a warning (it needs a prior run).
+    // `inputFrom` is a dependency edge. The execution planner topologically
+    // orders forward references; only missing references are invalid here.
     const positions = new Map(config.jobs.map((job, index) => [job?.id, index]));
     config.jobs.forEach((job, index) => {
       if (!isPlainObject(job?.inputFrom)) return;
@@ -373,8 +417,6 @@ export function validateConfig(config, options = {}) {
         if (typeof refJob !== 'string' || !refJob) continue;
         if (!positions.has(refJob)) {
           context.error(`jobs[${index}].inputFrom.${slot}.job`, `unknown job "${refJob}"`);
-        } else if (positions.get(refJob) >= index) {
-          context.warn(`jobs[${index}].inputFrom.${slot}`, `job "${refJob}" is defined later; inputFrom resolves from that job in this run or from its persisted assetIds earlier`);
         }
       }
     });

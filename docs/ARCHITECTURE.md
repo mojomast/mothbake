@@ -1,14 +1,37 @@
 # Architecture
 
-`mothbake` is a small pipeline with four contracts: **jobs**, **results**,
-**records**, and **emitters**. Everything between them is a pure function, which
-is why the whole thing tests offline.
+`mothbake` is a local-first pipeline with explicit contracts for **recipes**,
+**plans**, **run state**, **raw results**, **records/candidates**, **approvals**
+and **exports**. Media transforms remain pure; paid execution state does not
+live in authored recipes.
 
 ```
-config ─▶ jobs ─▶ [resolve] ─▶ raw outputs ─▶ [decode] ─▶ [bake] ─▶ records ─▶ [emit] ─▶ artifacts
-             │                                                                             ▲
-             └──────────────────────── provenance ─────────────────────────────────────────┘
+recipe ─▶ dependency plan ─▶ run journal ─▶ raw archive ─▶ local bake ─▶ candidates
+               │                  │              │                            │
+               └── spend gate ────┘              └── offline rebuild         ▼
+                                                                    approval lock ─▶ transactional export
 ```
+
+The identities at each arrow are intentionally different. A recipe fingerprint
+cannot certify stochastic output bytes; a local-bake fingerprint depends on the
+actual archived content; an export fingerprint depends on baked content and
+exporter options. Signed URLs are never identities.
+
+The run journal (`src/run-journal.mjs`) is a versioned atomic JSON file guarded
+by an advisory single-host lock. It records prepared, submitting, submitted,
+polling, completed, downloaded, baked, published, remote/local failure and
+unknown-submission states. A returned job id is persisted before polling.
+Unknown submission outcomes never fall through to a new request.
+
+`src/job-graph.mjs` topologically orders `inputFrom` edges and expands `--only`
+to include required ancestors. `src/execution-plan.mjs` hashes source bytes and
+dependencies, classifies local/archive/resume/submit work and produces the exact
+fingerprint required by the spending gate.
+
+New raw directories include `.mothbake-archive.json` with slot hashes,
+generation identity and the inline-result hash. `repair` verifies this manifest
+and supports every built-in baker. A legacy directory is readable but labelled
+unverified.
 
 ## Stages
 
@@ -49,19 +72,22 @@ reproducible on any platform. A module config can add its own generators under
 
 ### 3. Resolve (`src/api.mjs`, `src/runner.mjs`)
 
-Resolution has three paths, in order:
+Resolution is chosen by a frozen dependency/spending plan, in order:
 
-1. **Recorded** (`job.recorded`, skipped by `--force`) — read local files, no
-   API, no key.
-2. **Cached** (`job.jobId`, skipped by `--force`) — check the job status; if it
-   is `completed`, fetch the result. Any other outcome — `failed`, `cancelled`,
-   still running, an unrecognized status, or a status request that errors — does
-   **not** fall through to a fresh submission: it fails the job with a message
-   that names `--force`, because an automatic resubmission would spend credits
-   when the user only meant to reuse a result.
-3. **Live** — upload inputs (`create asset` → presigned `PUT` → `complete`),
-   inject `params.values` from `generateValues`, `POST …/process`, poll
-   `…/status`, fetch `…/result`.
+1. **Recorded** — read the declared fixture, no API or key.
+2. **Archive rebuild** — verify the generation/recipe/blob hashes and rebuild
+   locally. Immutable raw-name conflicts fail before spending.
+3. **Journal resume** — attach to a known queued/processing job or retrieve a
+   known completed result. Legacy manually attached ids are explicitly
+   unverified and cannot cross known recipe provenance.
+4. **Live** — only after the exact frozen plan passes local budget policy and
+   is supplied as `--approve-spend <fingerprint>`: upload inputs, persist
+   `submitting`, POST, persist the returned id, poll and fetch the result.
+
+`submitting` without a confirmed id and `unknown-submission` are manual
+reconciliation states and never become a POST. `--force` creates fresh intent
+but is not spending approval. Engines prefixed `local:` are blocked from this
+runner and must use an explicit local-backend command.
 
 The client is injectable (`fetchImpl`, `sleepImpl`) and is created from
 `baseUrl` + key for the duration of a run. `MOTH_API_KEY` is required only when
@@ -74,7 +100,8 @@ start one at a time and never faster than the interval. A `429` honours
 exponentially with jitter (`MOTH_RETRY_BASE_MS` default 1000,
 `MOTH_RETRY_CAP_MS` default 30000, `MOTH_MAX_RETRIES` default 5), logging each
 wait as `rate limited, retrying in Ns`. GETs and non-submit POSTs retry `429`,
-transient `5xx` and network failures; a job submit retries only `429` — after a
+  transient `5xx` and network failures; unsafe POSTs retry only a definite
+  `429` — after a
 network error or `5xx` it fails closed with a "may or may not have been created"
 message, because a retry could pay for a second job. Polling is adaptive:
 `MOTH_POLL_INTERVAL_MS` (default 1500 ms), growing 1.5x while the status marker
@@ -82,21 +109,23 @@ is unchanged up to `MOTH_POLL_MAX_INTERVAL_MS` (default 5000 ms), reset on any
 transition; the 15-minute timeout is unchanged.
 
 Raw outputs are archived under `<out>/raw/<raw>/` as `<slot>.<ext>` (extension
-from `content_type`), and an inline `result` is written as `result.json`. The
+from `content_type`), and an inline `result` is written as
+`inline-result.json`. `.mothbake-archive.json` binds every file hash to its
+generation identity. The
 `raw` name and the `saved` map are passed to bakers, which is how the `ir` baker
 can emit a portable relative path.
 
 Each saved output also carries the API's `output_asset_id` (when present). The
-runner keeps those ids for the duration of a run and, for a JSON config, writes
-them back as `job.assetIds`, and records them in the bundle provenance as
+runner keeps those ids for the verified run, optionally writes compatibility
+metadata back to a JSON config, and records them in bundle provenance as
 `<job>.outputs`. A later job can then set `inputFrom: { slot: { job, slot } }`
-to reuse an earlier artifact without re-uploading or re-paying. Resolution order
-is: this run's captured id → the persisted `assetIds` → a re-upload of the
-archived raw output → an error.
+to reuse an earlier artifact without re-uploading or re-paying. Resolution uses
+this run's captured id or a re-upload of that run's freshly hash-verified
+archive. Mutable persisted ids never satisfy a dirty dependency edge.
 
-Newly obtained `jobId`s are written back to JSON configs only when they change
-and when `writeBack !== false`. Module configs are never rewritten; the runner
-logs the ids instead (they are in the bundle's provenance either way).
+Newly obtained `jobId`s are persisted in the run journal before polling.
+Compatibility write-back to JSON configs remains optional. Module configs are
+never rewritten.
 
 By default a failed job is collected and the run continues; `strict: true`
 (the CLI's `--strict`) rethrows the first failure and aborts before emitting.
@@ -131,7 +160,8 @@ the record key.
 `sprite-sheet` and the audio bakers follow the same records-are-data rule: the
 WAV decoder normalises PCM to float channels and `audio-clip` emits a
 self-contained WAV (base64) with trim, gain and loop metadata — or, with
-`embed: false`, a `file`/`url` reference for large clips. `audio-stitch`
+`embed: false`, a `file`/`url` reference to a separately encoded processed WAV
+under `processed/audio/`. It never aliases provider raw bytes. `audio-stitch`
 concatenates ordered slots with crossfades and `echo-map` reduces a trajectory
 envelope to a compact tap map. None bake a consumer-specific shape — the
 `atlas`, `files` and `audio-pack` emitters decide how the bytes land on disk.
@@ -140,8 +170,9 @@ The built-in bakers are thin wrappers over the decoders:
 
 | Baker | Decoders used |
 | --- | --- |
-| `texture-tile`, `sky` | `decodePng`, `resizeNearest` |
-| `material-lut` | `unzip`, `decodeHdr`, `hdrToRgb8` |
+| `texture-tile` | `decodePng`, explicit bilinear/nearest resize, boundary diagnostics |
+| `sky` | `decodePng`, `resizeNearest`; requires declared equirectangular source projection |
+| `material-lut` | `unzip`, `decodeHdr`, `hdrToRgb8`; retains hashed HDR masters separately from previews |
 | `normal-map`, `effect-frame` | `resampleGrid`, `gridToNormal`, `gridToRamp` |
 | `raw-grid` | none (copies a validated numeric inline grid without image scaling) |
 | `motif` | `decodeMidi` |
@@ -152,7 +183,8 @@ The built-in bakers are thin wrappers over the decoders:
 | `echo-map` | none (recursive JSON tap extraction) |
 | `level-graph`, `seed` | none (inline JSON) |
 
-The two audio bakers share `src/bakers/audio.mjs`: linear resampling, the
+The two audio bakers share `src/bakers/audio.mjs`: explicit preview linear or
+production windowed-sinc resampling, category-aware quality reporting, the
 deterministic loop-seam finder, the equal-power seam crossfade and the
 `embed`/`file`/`url` descriptor builder. `echo-map` and `ir` share the recursive
 `tapsFrom()` extractor and the `url`/`urlBase` resolver in
@@ -215,20 +247,17 @@ case ignored), and an empty body is an error rather than an empty artifact.
 
 ### 7. Repair (`src/repair.mjs`)
 
-`mothbake repair` is the offline counterpart of a run: it rebuilds the purely
-local, file-derived records from the raw outputs a previous run archived under
+`mothbake repair` is the offline counterpart of a run: it rebuilds every
+built-in baker from the raw outputs a previous run archived under
 `<out>/raw/<raw>/`, then re-runs the configured emitters — no API key, no
 credits. `readRawResults()` maps `<slot>.<ext>` back onto declared slot names
-and reads `result.json` as the inline result, so a baker sees exactly the
+and reads `inline-result.json` as the inline result, so a baker sees exactly the
 `{ files, saved, result }` shape a normal resolve produces (including the
 relative `file` an `ir`/`audio-clip` descriptor points at).
 
-`LOCAL_BAKE_TYPES` (`ir`/`ir-descriptor`, `echo-map`, `audio-clip`,
-`audio-stitch`) is the set whose inputs are entirely local. It is the portable
-counterpart of the upstream repair path and deliberately includes the
-file-derived `audio-clip` (`embed: false`), which writes a WAV beside its
-descriptor, so a baker fix can be re-applied without re-paying for the engine
-run. `rebuildLocalBakes()` is pure over the filesystem and collects missing
+`LOCAL_BAKE_TYPES` mirrors the built-in baker registry. A job may use `bakes`
+to feed one archived result into several local transforms without another
+submission. `rebuildLocalBakes()` is pure over the filesystem and collects missing
 archives and baker errors as `failures`; `repairConfig()` emits the rebuilt
 records. Because it re-runs the emitters over only those records, scope it with
 `--only` (or a config of the local jobs) if the aggregate emitters should not
@@ -288,9 +317,24 @@ ported here with tests, docs and a changelog note.
 bin/mothbake.mjs        thin wrapper -> src/cli.mjs
 src/cli.mjs             argument parsing, commands, exit codes
 src/config.mjs          load + validate
-src/runner.mjs          resolve/archive/bake/emit orchestration
-src/repair.mjs          offline rebuild of local records from raw outputs
+src/execution-plan.mjs  frozen dependency/spending plan and layered recipe inputs
+src/job-graph.mjs       topological inputFrom planning and --only closure
+src/run-journal.mjs     durable single-host execution state and locking
+src/identity.mjs        canonical SHA-256 identities for each pipeline layer
+src/archive.mjs         hash-verified raw result archives
+src/runner.mjs          plan/resolve/archive/bake/emit orchestration
+src/repair.mjs          offline rebuild of every built-in baker
 src/api.mjs             HTTP client (engines, jobs, assets), pacing, retries, polling
+src/engine-contracts.mjs sanitized engine snapshots and request validation
+src/backends/*         bounded opt-in local backend subprocesses
+python/mothbake_backends optional Python shims; never installed by npm
+src/candidates.mjs      hash-verified local candidate index
+src/approvals.mjs       content-pinned approval and supersession history
+src/workbench-server.mjs loopback-only candidate review server
+src/variations.mjs      bounded, frozen exploration/refinement plans
+src/transactional-pack.mjs versioned pack promotion and rollback
+src/gc.mjs             read-only evidence/reference/hash reporting
+src/media-structure.mjs bounded container checks for non-decoded media
 src/bundle.mjs          records -> aggregate bundle
 src/values.mjs          generateValues grids
 src/noise.mjs           deterministic value noise

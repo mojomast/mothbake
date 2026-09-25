@@ -15,6 +15,7 @@ import * as json from './json.mjs';
 import * as esm from './esm.mjs';
 import * as atlas from './atlas.mjs';
 import * as audioPack from './audio-pack.mjs';
+import * as audioPackVersioned from './audio-pack-versioned.mjs';
 
 export const emitters = {
   files: files.emit,
@@ -22,6 +23,7 @@ export const emitters = {
   esm: esm.emit,
   atlas: atlas.emit,
   'audio-pack': audioPack.emit,
+  'audio-pack-versioned': audioPackVersioned.emit,
 };
 
 export const emitterTypes = Object.keys(emitters);
